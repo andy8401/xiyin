@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release network policy: HTTPS only, with one deliberate exception.
+
+  cnradio (云听) hands its live streams to the player as plain HTTP — the
+  station API returns e.g. http://ytcast2.radio.cn/110/radios/40639/index_40639.m3u8
+  — so radio.cn and its subdomains must stay reachable over cleartext or every
+  live station breaks. Nothing else in the bundled plugins needs HTTP: demo
+  plays a local file, ximalaya-web talks to https endpoints only.
+
+  Debug builds override this file (src/debug/res/xml/network_security_config.xml)
+  so a developer can point a plugin at any http endpoint.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">radio.cn</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,62 @@
+{
+  "id": "cnradio",
+  "name": "云听 · 央广在线收音机",
+  "version": "1.1.0",
+  "description": "云听(radio.cn) 电台直播与节目回听：全国 32 个地区 900+ 个电台、按地区/类型浏览、搜索、正在直播的节目名，以及往期节目回听。",
+  "main": "index.js",
+  "playback": "stream",
+  "minAppVersion": "0.1.8",
+  "permissions": {
+    "network": [
+      "*.radio.cn",
+      "radio.cn",
+      "127.0.0.1",
+      "localhost"
+    ],
+    "process": [
+      "python3",
+      "python",
+      "py",
+      "ffmpeg"
+    ]
+  },
+  "requestHeaders": [
+    {
+      "hosts": ["*.radio.cn"],
+      "kinds": ["image", "audio"],
+      "headers": {
+        "Referer": "https://www.radio.cn/",
+        "User-Agent": "Mozilla/5.0 (compatible; MyGoMusic/1.0)"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "key": "bridge",
+      "label": "Live stream bridge / 直播转流方式",
+      "help": "auto = Python bridge, then ffmpeg; python = force bridge.py (needs Python 3); ffmpeg = force ffmpeg; direct = hand the HLS URL straight to the player (MyGo Music cannot decode HLS, for debugging only). 默认 auto。"
+    },
+    {
+      "key": "pythonCmd",
+      "label": "Python command / Python 命令名",
+      "help": "Only a command name, not a path: python3, python or py (these are the declared process permissions). Leave empty to try all three. 只填命令名，不要填绝对路径。"
+    },
+    {
+      "key": "ffmpegCmd",
+      "label": "ffmpeg command / ffmpeg 命令名",
+      "help": "Command name on PATH, normally ffmpeg. Only used when the bridge is set to ffmpeg or when Python is unavailable."
+    },
+    {
+      "key": "quality",
+      "label": "Live quality / 直播码率",
+      "help": "high = playUrlMulti / mp3PlayUrlHigh; low = mp3PlayUrlLow / playUrlLow. 填 high 或 low，默认 high。"
+    }
+  ],
+  "navigation": [
+    { "builtin": "home", "title": "云听首页" },
+    { "builtin": "stations", "title": "全部电台" },
+    { "title": "按地区", "page": "regions", "icon": "radio" },
+    { "title": "按类型", "page": "categories", "icon": "star" },
+    { "title": "节目回听", "page": "replay", "icon": "calendar" }
+  ]
+}

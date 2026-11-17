@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only override of the release policy: while developing, a plugin may be
+  pointed at any plain-HTTP endpoint (a local test server, a proxied stream).
+  Release builds keep the strict file in src/main/res/xml/.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

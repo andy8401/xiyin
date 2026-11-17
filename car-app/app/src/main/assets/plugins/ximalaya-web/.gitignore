@@ -1,0 +1,9 @@
+# Installable ZIPs are release artifacts; rebuild with `python scripts/pack.py`.
+dist/
+
+node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+*.tmp

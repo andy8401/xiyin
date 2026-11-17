@@ -1,0 +1,16 @@
+{
+  "name": "mygo-ximalaya-web-plugin",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "MyGo Music plugin for www.ximalaya.com web features, zero runtime/build dependencies",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check index.js",
+    "test": "node --test tests/*.test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "probe": "node scripts/probe.mjs",
+    "pack": "npm run build && python scripts/pack.py"
+  }
+}

@@ -1,0 +1,26 @@
+# Local toolchain and build output (never committed)
+.toolchain/
+build/
+**/build/
+.gradle/
+**/.gradle/
+local.properties
+
+# Signing material — keystore.properties holds passwords
+keystore.properties
+*.jks
+*.keystore
+
+# Binary deliverables are attached to Releases, not committed
+*.apk
+*.aab
+*.aar
+*.class
+*.so
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+__pycache__/
+*.pyc
