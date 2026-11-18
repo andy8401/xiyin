@@ -25,11 +25,11 @@ android {
         // mygobridge.aar was built with -androidapi 24; do not go below it.
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
+        versionCode = 2
         // The app's own version. Not to be confused with the Go facade's
         // appVersion ("0.1.25"), which is the *host capability* version that
         // plugins gate themselves on via minAppVersion.
-        versionName = "0.1.0"
+        versionName = "0.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
