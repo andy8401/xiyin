@@ -262,24 +262,41 @@ fun RowScope.LibraryTile(item: BrowseItem, onClick: () -> Unit) {
     }
 }
 
+/**
+ * One navigation-rail button. Sizes are parameters so [LeftRail] can grow the
+ * button on a large car panel; the defaults keep the compact head-unit look
+ * on smaller windows and preserve the old call sites.
+ */
 @Composable
-fun NavButton(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+fun NavButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    height: androidx.compose.ui.unit.Dp = (TouchTarget + 4).dp,
+    width: androidx.compose.ui.unit.Dp = 56.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 22.dp,
+    labelSize: Float = 10f,
+    onClick: () -> Unit
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .width(56.dp)
-            .height((TouchTarget + 4).dp) // compact rail: 60dp, still >= 56dp touch target
+            .width(width)
+            .height(height)
             .clickable { onClick() }
-            .background(if (selected) SurfaceHigh else Color.Transparent, RoundedCornerShape(14.dp))
+            .background(
+                if (selected) SurfaceHigh else Color.Transparent,
+                RoundedCornerShape(width * 0.18f)
+            )
             .padding(vertical = 4.dp)
     ) {
         Icon(icon, contentDescription = label, tint = if (selected) Cyan else TextMuted,
-            modifier = Modifier.size(22.dp))
+            modifier = Modifier.size(iconSize))
         Spacer(Modifier.height(2.dp))
-        // MUSE's rail is icon-led; the tiny label keeps it glanceable on a
-        // head unit (and reachable by the UI tests) without a text-heavy bar.
-        Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+        // MUSE's rail is icon-led; the label keeps it glanceable on a head unit
+        // (and reachable by the UI tests) without a text-heavy bar.
+        Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSize.sp),
             color = if (selected) Cyan else TextMuted, maxLines = 1)
     }
 }

@@ -75,6 +75,8 @@ class MainViewModel : ViewModel() {
         val playerPane: PlayerPane = PlayerPane.LYRICS,
         /** Minimal driving view: one title, one play button, one progress bar. */
         val focusMode: Boolean = false,
+        /** 播放界面（首页）是否最大化到 32:9 超宽。默认 16:9；离开播放页自动还原。 */
+        val maximized: Boolean = false,
         val lyrics: LyricsText? = null,
         /** Track the current lyrics belong to, to drop late responses. */
         val lyricsTrackId: String = "",
@@ -354,7 +356,8 @@ class MainViewModel : ViewModel() {
     }
 
     fun navigate(page: Page) {
-        _ui.value = _ui.value.copy(page = page)
+        // 最大化只属于播放界面（首页）；切走时还原为 16:9。
+        _ui.value = _ui.value.copy(page = page, maximized = if (page == Page.HOME) _ui.value.maximized else false)
         guarded.launch {
             when (page) {
                 Page.LIBRARY -> _ui.value = _ui.value.copy(browse = MusicRepository.localTracks())
@@ -532,6 +535,12 @@ class MainViewModel : ViewModel() {
     fun closePlayer() { _ui.value = _ui.value.copy(playerOpen = false) }
 
     fun setFocusMode(on: Boolean) { _ui.value = _ui.value.copy(focusMode = on) }
+
+    /** 播放界面的 16:9 ↔ 32:9 最大化切换；仅首页可用。 */
+    fun toggleMaximized() {
+        if (_ui.value.page != Page.HOME) return
+        _ui.value = _ui.value.copy(maximized = !_ui.value.maximized)
+    }
 
     fun setPlayerPane(pane: PlayerPane) {
         _ui.value = _ui.value.copy(playerPane = pane)

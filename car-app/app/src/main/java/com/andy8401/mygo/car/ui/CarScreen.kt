@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Switch
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -54,8 +57,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.andy8401.mygo.car.BuildVersion
 import com.andy8401.mygo.car.data.Browse
 import com.andy8401.mygo.car.data.BrowseItem
@@ -71,76 +76,133 @@ import com.andy8401.mygo.car.ui.CarColors.TextMuted
 import com.andy8401.mygo.car.ui.MainViewModel.Page
 
 /**
- * Landscape car layout.
+ * Landscape car layout with a 16:9 default and a 32:9 maximized player.
  *
- * The head-unit panel is 2560×1600 (16:10), but the media app is locked to a
- * 16:9 content area (2560×1440). The remaining ~160px at the bottom is left
- * untouched for the vehicle's own system operation bar — the app draws nothing
- * there. Sheets and overlays are clipped to the 16:9 area so they never bleed
- * into the system bar region.
+ * Every page renders inside the safe area inset by the system bars. By default
+ * the app content is locked to 16:9 and centred, so on an ultra-wide head unit
+ * (Lynk & Co 900, 32:10) it does NOT stretch or overflow the vehicle's bottom
+ * bar. Only the playing page (HOME) may be maximized: tapping its button fills
+ * the whole safe area, which on a 32:9 panel gives the immersive wide layout.
+ * Leaving HOME restores the 16:9 default automatically (see ViewModel.navigate).
  */
 @Composable
 fun CarScreen(vm: MainViewModel) {
     val ui by vm.ui.collectAsState()
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Background)) {
-        // App area is always 16:9, sized from the panel width. On 2560px wide
-        // that is 1440px tall, leaving the bottom strip to the car's system UI.
-        val appHeight = maxWidth * 9f / 16f
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .background(Background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        val safeWidth = maxWidth
+        val safeHeight = maxHeight
+        // 16:9 by default; maximized only on HOME. Width is derived from the
+        // usable HEIGHT and capped to the panel width so the content can never
+        // exceed the screen (the old bug on ultra-wide panels).
+        val isPlayingPage = ui.page == Page.HOME
+        val wide = isPlayingPage && ui.maximized
+        val contentWidth = if (wide) safeWidth else minOf(safeWidth, safeHeight * 16f / 9f)
+        val contentHeight = if (wide) safeHeight else contentWidth * 9f / 16f
 
-        // 16:9 media app area, anchored to the top of the panel.
-        Box(Modifier.fillMaxWidth().height(appHeight).background(Background)) {
-            // The window is edge-to-edge with a transparent status bar, so the
-            // app's own background tints the bar. Content still starts below
-            // it: the clock and signal icons would sit on the title.
-            Row(Modifier.fillMaxSize().statusBarsPadding()) {
-                LeftRail(ui.page, vm)
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    Column(Modifier.fillMaxSize()) {
-                        ContentArea(ui, vm, Modifier.weight(1f))
-                        PlayerBar(
-                            player = ui.player,
-                            lyricsEnabled = ui.settings.lyrics,
-                            onOpen = { vm.openPlayer() },
-                            onOpenQueue = { vm.openPlayer(MainViewModel.PlayerPane.QUEUE) },
-                            vm = vm
-                        )
+        // Full safe area: dark background tints the transparent system bars.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // The 16:9 / maximized app surface, centred inside the safe area.
+            Box(Modifier.width(contentWidth).height(contentHeight).background(Background)) {
+                Row(Modifier.fillMaxSize()) {
+                    LeftRail(ui.page, vm, contentHeight)
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize()) {
+                            ContentArea(ui, vm, Modifier.weight(1f))
+                            PlayerBar(
+                                player = ui.player,
+                                lyricsEnabled = ui.settings.lyrics,
+                                onOpen = { vm.openPlayer() },
+                                onOpenQueue = { vm.openPlayer(MainViewModel.PlayerPane.QUEUE) },
+                                vm = vm
+                            )
+                        }
                     }
                 }
+                // 最大化切换只在播放界面（首页）出现。
+                if (isPlayingPage) {
+                    MaximizeToggle(
+                        maximized = wide,
+                        onToggle = { vm.toggleMaximized() },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    )
+                }
+                if (ui.playerOpen) {
+                    NowPlayingSheet(ui, vm)
+                }
+                // The plugin form and the uninstall prompt both outrank the player
+                // sheet: they are short-lived and the user is mid-task. The sign-in
+                // card sits on top of all of them.
+                PluginSettingsSheet(ui, vm)
+                UninstallDialog(ui, vm)
+                SignInPromptSheet(ui, vm)
+                if (ui.message.isNotBlank()) {
+                    ToastBubble(ui.message, onDone = { vm.dismissMessage() })
+                }
+                // The driving view outranks everything, including sign-in.
+                if (ui.focusMode) FocusModeScreen(ui, vm)
             }
-            if (ui.playerOpen) {
-                NowPlayingSheet(ui, vm)
-            }
-            // The plugin form and the uninstall prompt both outrank the player
-            // sheet: they are short-lived and the user is mid-task. The sign-in
-            // card sits on top of all of them.
-            PluginSettingsSheet(ui, vm)
-            UninstallDialog(ui, vm)
-            SignInPromptSheet(ui, vm)
-            if (ui.message.isNotBlank()) {
-                ToastBubble(ui.message, onDone = { vm.dismissMessage() })
-            }
-            // The driving view outranks everything, including sign-in.
-            if (ui.focusMode) FocusModeScreen(ui, vm)
         }
     }
 }
 
+/** 播放界面右上角的 16:9 ↔ 32:9 切换按钮。 */
 @Composable
-private fun LeftRail(page: Page, vm: MainViewModel) {
+private fun MaximizeToggle(maximized: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val icon = if (maximized) Icons.Filled.ZoomOut else Icons.Filled.ZoomIn
+    val label = if (maximized) "还原" else "最大化"
+    Row(
+        modifier
+            .padding(top = 20.dp, end = 20.dp)
+            .height(56.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (maximized) SurfaceHigh else Surface)
+            .clickable { onToggle() }
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = Cyan, modifier = Modifier.size(28.dp))
+        Text(label, color = Cyan, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/**
+ * The left navigation rail, scaled to the usable panel height.
+ *
+ * The old fixed 64dp rail was sized for a short 411dp window and reads as a
+ * hairline on a 900-class wide screen. Deriving it from maxHeight makes the
+ * rail, its icons and its labels grow with the car panel while staying inside
+ * the system-bar safe area that CarScreen already established.
+ */
+@Composable
+private fun LeftRail(page: Page, vm: MainViewModel, availableHeight: androidx.compose.ui.unit.Dp) {
+    // ~9% of the usable height, clamped so a phone stays compact and a 6K car
+    // panel gets a comfortably tappable rail (96–180dp).
+    val railWidth = maxOf(96.dp, minOf(availableHeight * 0.09f, 180.dp))
+    val navHeight = maxOf(76.dp, minOf(availableHeight / 7f, 132.dp))
+    val iconSize = maxOf(26.dp, minOf(railWidth * 0.34f, 52.dp))
+    val labelSize = maxOf(12f, minOf(railWidth.value * 0.14f, 20f))
     Column(
-        Modifier.width(64.dp).fillMaxHeight().background(Surface).padding(vertical = 8.dp),
+        Modifier.width(railWidth).fillMaxHeight().background(Surface)
+            .padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // MUSE wordmark reduced to its initial: the icon-led rail has no room
         // for a full name, and the brand is spelled out on the settings page.
-        Text("M", style = MaterialTheme.typography.titleLarge, color = Cyan)
-        NavButton(Icons.Filled.GraphicEq, "首页", page == Page.HOME) { vm.navigate(Page.HOME) }
-        NavButton(Icons.Filled.MusicNote, "搜索", page == Page.SEARCH) { vm.navigate(Page.SEARCH) }
-        NavButton(Icons.Filled.Radio, "本地", page == Page.LIBRARY) { vm.navigate(Page.LIBRARY) }
-        NavButton(Icons.Filled.Mic, "插件", page == Page.PLUGINS) { vm.navigate(Page.PLUGINS) }
-        NavButton(Icons.Filled.Tune, "设置", page == Page.SETTINGS) { vm.navigate(Page.SETTINGS) }
+        Text("M", style = MaterialTheme.typography.titleLarge.copy(fontSize = labelSize.sp * 1.6f), color = Cyan)
+        NavButton(Icons.Filled.GraphicEq, "首页", page == Page.HOME, navHeight, railWidth, iconSize, labelSize) { vm.navigate(Page.HOME) }
+        NavButton(Icons.Filled.MusicNote, "搜索", page == Page.SEARCH, navHeight, railWidth, iconSize, labelSize) { vm.navigate(Page.SEARCH) }
+        NavButton(Icons.Filled.Radio, "本地", page == Page.LIBRARY, navHeight, railWidth, iconSize, labelSize) { vm.navigate(Page.LIBRARY) }
+        NavButton(Icons.Filled.Mic, "插件", page == Page.PLUGINS, navHeight, railWidth, iconSize, labelSize) { vm.navigate(Page.PLUGINS) }
+        NavButton(Icons.Filled.Tune, "设置", page == Page.SETTINGS, navHeight, railWidth, iconSize, labelSize) { vm.navigate(Page.SETTINGS) }
     }
 }
 

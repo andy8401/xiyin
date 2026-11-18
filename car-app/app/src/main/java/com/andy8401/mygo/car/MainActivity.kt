@@ -45,16 +45,17 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Edge-to-edge with a *visible* but transparent status bar.
+     * Edge-to-edge, with BOTH system bars visible and transparent.
      *
-     * The car UI draws its own dark background all the way to the top, so the
-     * bar shows the app's colour instead of a system grey. Light icons are
-     * forced because that background is always dark. Content is inset below the
-     * bar in CarScreen (statusBarsPadding), so the clock never sits on the
-     * MyGo title.
+     * The car UI draws its own dark background all the way to the edges, so the
+     * bars show the app's colour instead of a system grey. Light icons are
+     * forced because that background is always dark.
      *
-     * The navigation bar stays hidden: a head unit has no use for
-     * back/home/recents, and it is swipe-revealable if a passenger needs it.
+     * Lynk & Co 900 reserves the bottom strip of the panel for the vehicle's own
+     * navigation / climate bar. Hiding the Android navigation bar let our
+     * content cover that strip, so the car bar never appeared. We now show the
+     * system bars and inset the Composable content with statusBarsPadding() +
+     * navigationBarsPadding() in CarScreen, which keeps the car's bar visible.
      */
     private fun setUpSystemBars() {
         val transparent = android.graphics.Color.TRANSPARENT
@@ -65,10 +66,11 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             show(WindowInsetsCompat.Type.statusBars())
-            hide(WindowInsetsCompat.Type.navigationBars())
+            show(WindowInsetsCompat.Type.navigationBars())
             systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
         }
     }
 
