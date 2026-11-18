@@ -23,12 +23,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,6 +41,10 @@ import com.andy8401.mygo.car.ui.CarColors.Cyan
 import com.andy8401.mygo.car.ui.CarColors.SurfaceHigh
 import com.andy8401.mygo.car.ui.CarColors.Text
 import com.andy8401.mygo.car.ui.CarColors.TextMuted
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import coil.request.ImageRequest
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -130,16 +137,55 @@ fun MuseCover(label: String, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Artwork that prefers the plugin's online cover image and falls back to the
+ * locally drawn [MuseCover] when there is no URL or the fetch fails.
+ *
+ * Plugins (ximalaya-web, cnradio, ...) hand us a real album/track cover URL in
+ * music.ImageURL; it is parsed all the way into Track/BrowseItem.imageUrl. The
+ * redesign originally ignored it and drew a local gradient for every cover,
+ * which is why no online artwork ever appeared. This is the single place that
+ * decides online-first / local-fallback, so every cover site gets the behavior.
+ */
+@Composable
+fun ArtworkImage(
+    imageUrl: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop
+) {
+    if (imageUrl.isBlank()) {
+        MuseCover(label, modifier)
+        return
+    }
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(imageUrl)
+            .crossfade(true)
+            .build(),
+        contentDescription = label,
+        contentScale = contentScale,
+        modifier = modifier.clip(RoundedCornerShape(10.dp)),
+    ) {
+        when (painter.state) {
+            is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+            else -> MuseCover(label, Modifier.fillMaxSize())
+        }
+    }
+}
+
 /** Small square cover used in rows and tiles. */
 @Composable
-fun CoverImage(label: String, size: Int, modifier: Modifier = Modifier) {
-    MuseCover(label, modifier.size(size.dp))
+fun CoverImage(
+    label: String, size: Int, modifier: Modifier = Modifier, imageUrl: String = ""
+) {
+    ArtworkImage(imageUrl, label, modifier.size(size.dp))
 }
 
 /** Flexible square cover used by the player sheet. */
 @Composable
-fun CoverImageFill(label: String, modifier: Modifier = Modifier) {
-    MuseCover(label, modifier)
+fun CoverImageFill(label: String, modifier: Modifier = Modifier, imageUrl: String = "") {
+    ArtworkImage(imageUrl, label, modifier)
 }
 
 @Composable
@@ -159,7 +205,7 @@ fun TrackRow(track: Track, playing: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.padding(horizontal = 4.dp)
     ) {
-        CoverImage(track.name, 48)
+        CoverImage(track.name, 48, imageUrl = track.imageUrl)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(track.name, style = MaterialTheme.typography.bodyLarge,
@@ -186,7 +232,7 @@ fun TileItem(item: BrowseItem, onClick: () -> Unit) {
     ) {
         // size() is only a preference: a cramped parent shrinks the cover and
         // squashes the caption to a few pixels. Claim the height explicitly.
-        CoverImage(item.title, TileCover, Modifier.height(TileCover.dp))
+        CoverImage(item.title, TileCover, Modifier.height(TileCover.dp), imageUrl = item.imageUrl)
         Spacer(Modifier.height(6.dp))
         Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -209,7 +255,7 @@ fun RowScope.LibraryTile(item: BrowseItem, onClick: () -> Unit) {
     ) {
         // 1.7 keeps the caption above the player bar on a 411dp-tall window;
         // the spec's taller artwork only fits when the bar is hidden.
-        MuseCover(item.title, Modifier.fillMaxWidth().aspectRatio(1.9f))
+        ArtworkImage(item.imageUrl, item.title, Modifier.fillMaxWidth().aspectRatio(1.9f))
         Spacer(Modifier.height(8.dp))
         Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
             maxLines = 1, overflow = TextOverflow.Ellipsis)

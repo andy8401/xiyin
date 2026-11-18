@@ -95,13 +95,13 @@ class PlaybackService : MediaSessionService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                "MyGo Car playback",
+                getString(com.andy8401.mygo.car.R.string.notification_channel),
                 NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("MyGo Car")
+            .setContentTitle(getString(com.andy8401.mygo.car.R.string.app_name))
             .setContentText("Ready")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)

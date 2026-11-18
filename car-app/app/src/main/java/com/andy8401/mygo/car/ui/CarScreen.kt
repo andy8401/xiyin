@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -53,7 +54,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.andy8401.mygo.car.BuildVersion
@@ -70,45 +70,59 @@ import com.andy8401.mygo.car.ui.CarColors.Text
 import com.andy8401.mygo.car.ui.CarColors.TextMuted
 import com.andy8401.mygo.car.ui.MainViewModel.Page
 
-/** Landscape car layout: left rail + content + bottom player bar. */
+/**
+ * Landscape car layout.
+ *
+ * The head-unit panel is 2560×1600 (16:10), but the media app is locked to a
+ * 16:9 content area (2560×1440). The remaining ~160px at the bottom is left
+ * untouched for the vehicle's own system operation bar — the app draws nothing
+ * there. Sheets and overlays are clipped to the 16:9 area so they never bleed
+ * into the system bar region.
+ */
 @Composable
 fun CarScreen(vm: MainViewModel) {
     val ui by vm.ui.collectAsState()
 
-    // The window is edge-to-edge with a transparent status bar, so the app's
-    // own background tints the bar. Content still starts below it: the clock and
-    // the signal icons would otherwise sit on the MyGo title.
-    Box(Modifier.fillMaxSize().background(Background)) {
-        Row(Modifier.fillMaxSize().statusBarsPadding()) {
-            LeftRail(ui.page, vm)
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                Column(Modifier.fillMaxSize()) {
-                    ContentArea(ui, vm, Modifier.weight(1f))
-                    PlayerBar(
-                        player = ui.player,
-                        lyricsEnabled = ui.settings.lyrics,
-                        onOpen = { vm.openPlayer() },
-                        onOpenQueue = { vm.openPlayer(MainViewModel.PlayerPane.QUEUE) },
-                        vm = vm
-                    )
+    BoxWithConstraints(Modifier.fillMaxSize().background(Background)) {
+        // App area is always 16:9, sized from the panel width. On 2560px wide
+        // that is 1440px tall, leaving the bottom strip to the car's system UI.
+        val appHeight = maxWidth * 9f / 16f
+
+        // 16:9 media app area, anchored to the top of the panel.
+        Box(Modifier.fillMaxWidth().height(appHeight).background(Background)) {
+            // The window is edge-to-edge with a transparent status bar, so the
+            // app's own background tints the bar. Content still starts below
+            // it: the clock and signal icons would sit on the title.
+            Row(Modifier.fillMaxSize().statusBarsPadding()) {
+                LeftRail(ui.page, vm)
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    Column(Modifier.fillMaxSize()) {
+                        ContentArea(ui, vm, Modifier.weight(1f))
+                        PlayerBar(
+                            player = ui.player,
+                            lyricsEnabled = ui.settings.lyrics,
+                            onOpen = { vm.openPlayer() },
+                            onOpenQueue = { vm.openPlayer(MainViewModel.PlayerPane.QUEUE) },
+                            vm = vm
+                        )
+                    }
                 }
             }
+            if (ui.playerOpen) {
+                NowPlayingSheet(ui, vm)
+            }
+            // The plugin form and the uninstall prompt both outrank the player
+            // sheet: they are short-lived and the user is mid-task. The sign-in
+            // card sits on top of all of them.
+            PluginSettingsSheet(ui, vm)
+            UninstallDialog(ui, vm)
+            SignInPromptSheet(ui, vm)
+            if (ui.message.isNotBlank()) {
+                ToastBubble(ui.message, onDone = { vm.dismissMessage() })
+            }
+            // The driving view outranks everything, including sign-in.
+            if (ui.focusMode) FocusModeScreen(ui, vm)
         }
-        if (ui.playerOpen) {
-            NowPlayingSheet(ui, vm)
-        }
-        // The plugin form and the uninstall prompt both outrank the player
-        // sheet: they are short-lived and the user is mid-task. The sign-in
-        // card sits on top of all of them — the listener is waiting on it.
-        PluginSettingsSheet(ui, vm)
-        UninstallDialog(ui, vm)
-        SignInPromptSheet(ui, vm)
-        if (ui.message.isNotBlank()) {
-            ToastBubble(ui.message, onDone = { vm.dismissMessage() })
-        }
-        // The driving view outranks everything, including the sign-in card:
-        // nothing should pull the driver's eyes off the road.
-        if (ui.focusMode) FocusModeScreen(ui, vm)
     }
 }
 
@@ -321,7 +335,7 @@ private fun SettingsContent(ui: MainViewModel.UiState, vm: MainViewModel) {
         // branch, and the two different version numbers.
         Text("关于", style = MaterialTheme.typography.titleLarge, color = Text,
             modifier = Modifier.padding(top = 8.dp))
-        Text("MyGo Car ${BuildVersion.Name} · Android 车机版", color = Text)
+        Text("希音 ${BuildVersion.Name} · Android 车机版", color = Text)
         Text("AGPL-3.0 衍生作品 · 上游 ${BuildVersion.UpstreamRepo}", color = TextMuted)
         Text("本分支 ${BuildVersion.ForkRepo} · 完整源码随分发提供（NOTICE.md / LICENSE）", color = TextMuted)
         Text("宿主能力版本 ${ui.version}：插件按 minAppVersion 校验，与 App 版本无关", color = TextMuted)
@@ -363,7 +377,8 @@ private fun PlayerBar(
         modifier = Modifier.fillMaxWidth().height(88.dp).background(Surface)
             .clickable { onOpen() }.padding(horizontal = 16.dp)
     ) {
-        CoverImage(player.currentTrack?.name ?: "·", 56)
+        CoverImage(player.currentTrack?.name ?: "·", 56,
+            imageUrl = player.currentTrack?.imageUrl ?: "")
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(player.currentTrack?.name ?: "未播放", color = Text,

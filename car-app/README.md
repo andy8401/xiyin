@@ -1,6 +1,4 @@
-# car-app — 希音（原 MyGo Car）车机 Android 工程（阶段 D … K）
-
-> 项目已更名为「希音」；本文中的 MyGo Car 为历史名称。
+# car-app — MyGo Music 车机版 Android 工程（阶段 D … J）
 
 工作区内的 Kotlin/Compose 车机工程，消费 `android-bridge` 产出的 `mygobridge.aar`，
 用 Media3/ExoPlayer 替换桌面端 `mygo/audio`（方案 B：Go 只解析 `music.Stream{URL, Headers}`，

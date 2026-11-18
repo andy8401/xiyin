@@ -158,7 +158,8 @@ private fun PlayerStage(
             // Artwork gets the whole left third. The cover is the visual anchor
             // of the redesign; a small thumbnail would lose the whole effect.
             Box(Modifier.weight(1.1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                CoverImageFill(name, Modifier.fillMaxWidth(0.92f).aspectRatio(1f))
+                CoverImageFill(name, Modifier.fillMaxWidth(0.92f).aspectRatio(1f),
+                    imageUrl = player.currentTrack?.imageUrl ?: "")
             }
             Spacer(Modifier.width(32.dp))
 
@@ -295,7 +296,8 @@ private fun LyricsStage(
         Spacer(Modifier.height(12.dp))
         Row(Modifier.weight(1f).fillMaxWidth()) {
             Column(Modifier.width(180.dp)) {
-                CoverImageFill(name, Modifier.fillMaxWidth().aspectRatio(1f))
+                CoverImageFill(name, Modifier.fillMaxWidth().aspectRatio(1f),
+                    imageUrl = player.currentTrack?.imageUrl ?: "")
                 Spacer(Modifier.height(16.dp))
                 Text(name, style = MaterialTheme.typography.titleLarge, color = Paper,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)

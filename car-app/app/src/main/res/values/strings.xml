@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MyGo Car</string>
+    <string name="app_name">希音</string>
+    <string name="notification_channel">希音 播放</string>
     <string name="sign_in">登录</string>
 </resources>

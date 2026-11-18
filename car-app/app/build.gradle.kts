@@ -116,6 +116,11 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // Cover art: plugins hand us an online imageUrl for albums/tracks/shows.
+    // Coil loads that over the network and lets us fall back to the local
+    // MuseCover placeholder when the URL is empty or the fetch fails.
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
     // Audio path: Media3 consumes music.Stream{URL, Headers} supplied by Go.
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")

@@ -31,7 +31,15 @@ object GoBridge {
             val dataDir = app.filesDir.absolutePath
             val pluginDir = File(dataDir, "plugins")
 
-            installBundledPlugins(app.assets, pluginDir)
+            // No plugins are pre-installed in the shipped APK. Previously the
+            // bundled assets/plugins (cnradio / demo / ximalaya-web) were
+            // unpacked here on first boot; users are now expected to add
+            // sources themselves via the 插件 page (Install from repo / local
+            // zip). The assets are kept so a build can opt back in, but the
+            // default product is a clean slate. Existing dataDir/plugins from
+            // an earlier install is left untouched — only a fresh install
+            // starts empty.
+            // installBundledPlugins(app.assets, pluginDir)
 
             Facade.setHostBridge(BridgeHost(app))
             Facade.setMediaOutput(MediaOutputImpl(app))
