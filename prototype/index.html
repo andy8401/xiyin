@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>希音 · 车载内容中枢 — 概念原型</title>
+<style>
+  :root{
+    --ink:#0F0E0E; --gold:#E8C268; --paper:#F2F2F2; --espresso:#2E2620;
+    --surface:#171513; --muted:#9E938A; --line:#3A322C;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--ink);color:var(--paper);
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  body{display:flex;flex-direction:column}
+  .bar{height:34px;display:flex;align-items:center;padding:0 24px;gap:20px;
+    font-size:13px;color:var(--muted);background:var(--ink);border-bottom:1px solid #1c1917}
+  .bar .clock{color:var(--paper);font-weight:600}
+  .bar .pill{background:var(--espresso);color:var(--gold);padding:4px 12px;border-radius:12px}
+  .bar .spacer{flex:1}
+  .app{display:flex;flex:1;min-height:0}
+  /* left rail */
+  .rail{width:76px;background:var(--surface);display:flex;flex-direction:column;
+    align-items:center;padding:14px 0;gap:6px;border-right:1px solid #1c1917}
+  .logo{color:var(--gold);font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:14px}
+  .nav{width:60px;height:58px;border-radius:14px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;cursor:pointer;color:var(--muted);
+    transition:.18s;user-select:none}
+  .nav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+  .nav span{font-size:10px}
+  .nav:hover{background:#211d1a;color:var(--paper)}
+  .nav.on{background:var(--espresso);color:var(--gold)}
+  /* main */
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;padding:18px 26px 0}
+  .top{display:flex;align-items:center;gap:18px;margin-bottom:16px}
+  .top h1{font-size:24px;font-weight:600;letter-spacing:1px}
+  .tabs{display:flex;gap:8px}
+  .tab{padding:7px 15px;border-radius:16px;background:transparent;color:var(--muted);
+    font-size:13px;cursor:pointer;border:1px solid transparent}
+  .tab.on{background:var(--espresso);color:var(--gold);border-color:var(--line)}
+  .search{margin-left:auto;width:230px;padding:8px 14px;border-radius:18px;
+    background:var(--surface);border:1px solid var(--line);color:var(--muted);font-size:13px}
+  .shelf{flex:1;overflow:auto;min-height:0;padding-right:6px}
+  .shelf::-webkit-scrollbar{width:6px}
+  .shelf::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .sect{display:flex;align-items:center;margin:6px 0 10px}
+  .sect h2{font-size:17px;font-weight:500;color:var(--paper)}
+  .sect small{color:var(--muted);margin-left:10px;font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+  .card{cursor:pointer;min-width:0}
+  .cover{position:relative;width:100%;aspect-ratio:1.9;border-radius:12px;overflow:hidden}
+  .cover svg{position:absolute;inset:0;width:100%;height:100%}
+  .card .name{font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;color:var(--paper)}
+  .card .sub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;margin-top:2px}
+  .card:hover .cover{outline:2px solid var(--gold);outline-offset:2px}
+  .card.playing .name{color:var(--gold)}
+  /* player */
+  .player{height:96px;background:var(--surface);border-top:1px solid var(--line);
+    display:flex;align-items:center;padding:0 26px;gap:20px}
+  .player .mini{width:56px;height:56px;border-radius:10px;overflow:hidden;flex:none;position:relative}
+  .player .mini svg{width:100%;height:100%}
+  .player .meta{width:230px;min-width:0}
+  .player .meta b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .player .meta span{font-size:12px;color:var(--muted)}
+  .progress{flex:1;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)}
+  .track{height:4px;background:var(--line);border-radius:2px;flex:1;cursor:pointer;position:relative}
+  .track i{position:absolute;left:0;top:0;bottom:0;background:var(--gold);border-radius:2px;width:0}
+  .track i::after{content:"";position:absolute;right:-5px;top:-3px;width:10px;height:10px;
+    border-radius:50%;background:var(--gold)}
+  .ctrl{display:flex;align-items:center;gap:12px}
+  .ctrl button{background:none;border:0;color:var(--paper);cursor:pointer;width:34px;height:34px;
+    display:grid;place-items:center}
+  .ctrl button svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8}
+  .ctrl .play{width:50px;height:50px;border-radius:50%;background:var(--paper);color:var(--ink)}
+  .ctrl .play svg{fill:currentColor;stroke:none;width:22px;height:22px}
+  .hint{position:fixed;right:20px;bottom:110px;background:var(--espresso);color:var(--gold);
+    padding:8px 14px;border-radius:10px;font-size:12px;opacity:0;transition:.3s;pointer-events:none}
+  .hint.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="clock" id="clock">09:41</span><span>周三 · 11月18日</span>
+  <span class="pill">车载蓝牙 · iPhone 15</span>
+  <span class="spacer"></span><span>22° &nbsp; 4G &nbsp; ▮▮▮</span>
+</div>
+<div class="app">
+  <div class="rail">
+    <div class="logo">M</div>
+    <div class="nav on" data-cat="all">
+      <svg viewBox="0 0 24 24"><path d="M3 12h3l2-6 3 12 3-9 2 3h5"/></svg><span>首页</span></div>
+    <div class="nav" data-cat="music">
+      <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg><span>音乐</span></div>
+    <div class="nav" data-cat="podcast">
+      <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg><span>播客</span></div>
+    <div class="nav" data-cat="audiobook">
+      <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><path d="M8 7h7M8 11h7"/></svg><span>有声书</span></div>
+    <div class="nav" data-cat="radio">
+      <svg viewBox="0 0 24 24"><rect x="2" y="8" width="20" height="12" rx="2"/><circle cx="7" cy="14" r="2"/><path d="M14 12h5M14 16h5M12 8 18 3"/></svg><span>电台</span></div>
+    <div class="nav" data-cat="settings" style="margin-top:auto">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>设置</span></div>
+  </div>
+  <div class="main">
+    <div class="top">
+      <h1 id="heading">为你推荐</h1>
+      <div class="tabs" id="tabs"></div>
+      <input class="search" placeholder="搜索内容、主播、节目">
+    </div>
+    <div class="shelf" id="shelf"></div>
+    <div class="player">
+      <div class="mini" id="mini"></div>
+      <div class="meta"><b id="nowName">尚未播放</b><span id="nowSub">选择一张卡片开始</span></div>
+      <div class="progress">
+        <span id="t0">0:00</span>
+        <div class="track" id="track"><i id="seek"></i></div>
+        <span id="t1">--:--</span>
+      </div>
+      <div class="ctrl">
+        <button id="prev" title="上一个"><svg viewBox="0 0 24 24"><path d="M6 5v14M18 6 9 12l9 6z"/></svg></button>
+        <button class="play" id="play" title="播放"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+        <button id="next" title="下一个"><svg viewBox="0 0 24 24"><path d="M18 5v14M6 6l9 6-9 6z"/></svg></button>
+        <button id="focus" title="驾驶专注"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="hint" id="hint"></div>
+<script>
+const P=[["#D98A55","#6B3A66"],["#4E737B","#2B4952"],["#A46F6E","#654450"],["#6B5D8C","#3D3454"],["#61745C","#31402F"]];
+function art(t,seed=0,m=460){
+  const [a,b]=P[Math.abs(seed)%P.length], k=Math.abs(seed*7)%4;
+  let motif='';
+  if(k===0){motif='';for(let i=1;i<=5;i++)motif+=`<circle cx="${m/2}" cy="${m/2}" r="${m*i/22}" fill="none" stroke="#F2F2F2" stroke-opacity=".25" stroke-width="2"/>`;motif+=`<circle cx="${m/2}" cy="${m/2}" r="${m*.11}" fill="#D8A96B"/>`;}
+  if(k===1){motif='';for(let r=0;r<3;r++){let d=`M0 ${m*.44+r*m*.16}`;for(let x=0;x<=m;x+=20)d+=` L${x} ${m*.44+r*m*.16+Math.sin(x/m*6+r)*m*.05}`;motif+=`<path d="${d}" fill="none" stroke="#F2F2F2" stroke-opacity=".4" stroke-width="2"/>`;}}
+  if(k===2){motif=`<circle cx="${m*.68}" cy="${m*.28}" r="${m*.15}" fill="#F2F2F2" fill-opacity=".35"/><path d="M0 ${m} L${m} ${m*.42} L${m} ${m}Z" fill="#F2F2F2" fill-opacity=".12"/>`;}
+  if(k===3){motif=`<path d="M0 ${m*.78} L${m*.24} ${m*.52} L${m*.42} ${m*.68} L${m*.68} ${m*.36} L${m} ${m*.74}" fill="none" stroke="#F2F2F2" stroke-opacity=".5" stroke-width="2"/><circle cx="${m*.8}" cy="${m*.24}" r="${m*.09}" fill="#F2F2F2" fill-opacity=".3"/>`;}
+  return `<svg viewBox="0 0 ${m} ${m}" preserveAspectRatio="xMidYMid slice"><defs><linearGradient id="g${seed}" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="${m}" height="${m}" fill="url(#g${seed})"/>${motif}</svg>`;
+}
+const DATA={
+ all:{title:"为你推荐",groups:[
+  ["继续收听",[["夜航西飞","陈婧霏 · 泛音计划",248,"music"],["商业就是这样","第一财经 · 播客",620,"podcast"],["三体 · 广播剧","喜马拉雅 · 有声书",1830,"audiobook"]]],
+  ["今日精选",[["中国之声","中央广播电视总台",0,"radio"],["潮汐","李知璞 · 独立音乐",232,"music"],["故事FM","故事FM · 真实故事",1540,"podcast"],["长夜","泛音计划",302,"music"],["灯塔","泛音计划",287,"music"],["城市漫游","歌单 · 26 首",0,"music"],["归途","王梵瑞",218,"music"],["白夜","王梵瑞",192,"music"],["雾中列车","李知琛",262,"music"],["玻璃海","陈婧霏",238,"music"]]]]]},
+ music:{title:"音乐",groups:[["最近播放",[["夜航西飞","陈婧霏",248,"music"],["潮汐","李知璞",232,"music"],["长夜","泛音计划",302,"music"],["灯塔","泛音计划",287,"music"],["星尘","陈婧霏",206,"music"],["归途","王梵瑞",218,"music"],["白夜","王梵瑞",192,"music"],["玻璃海","陈婧霏",238,"music"],["城市漫游","歌单",0,"music"],["通勤清晨","歌单",0,"music"]]]]]},
+ podcast:{title:"播客",groups:[["正在更新",[["商业就是这样","第一财经",620,"podcast"],["故事FM","真实故事",1540,"podcast"],["声东击西","声动活泼",1980,"podcast"],["忽左忽右","JustPod",2160,"podcast"],["大内密谈","大内文化",2760,"podcast"],["不合时宜","深度对谈",1420,"podcast"],["随机波动","女性视角",1880,"podcast"],["文化有限","读书播客",1640,"podcast"],["日谈公园","文化闲聊",3120,"podcast"],["无聊斋","喜剧播客",1320,"podcast"]]]]]},
+ audiobook:{title:"有声书",groups:[["我的书架",[["三体 · 广播剧","喜马拉雅",1830,"audiobook"],["夜航西飞","陈婧霏 · 泛音计划",248,"audiobook"],["人类简史","中信出版",4260,"audiobook"],["活着","余华 · 有声版",3180,"audiobook"],["围城","钱钟书",2880,"audiobook"],["明朝那些事儿","当年明月",5400,"audiobook"],["小王子","圣埃克苏佩里",1260,"audiobook"],["百年孤独","马尔克斯",4620,"audiobook"],["看见","柴静",2160,"audiobook"],["设计心理学","诺曼",2040,"audiobook"]]]]]},
+ radio:{title:"电台",groups:[["国家台",[["中国之声","中央广播电视总台",0,"radio"],["经济之声","中央广播电视总台",0,"radio"],["音乐之声","中央广播电视总台",0,"radio"],["中国交通广播","交通运输部",0,"radio"],["环球资讯","国际广播电台",0,"radio"],["文艺之声","中央广播电视总台",0,"radio"],["etzt","中国国际广播电台",0,"radio"],["怀旧金曲","地方电台",0,"radio"],["城市之声","地方电台",0,"radio"],["财经资讯","地方电台",0,"radio"]]]]]}
+};
+let cat='all', current=null, playing=false, pos=0, list=[];
+const $=id=>document.getElementById(id);
+function fmt(s){if(!s)return'--:--';return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
+function render(){
+  $('heading').textContent=DATA[cat].title;
+  $('tabs').innerHTML=Object.entries(DATA).map(([k,v])=>`<div class="tab ${k===cat?'on':''}" data-k="${k}">${k==='all'?'全部':k==='music'?'音乐':k==='podcast'?'播客':k==='audiobook'?'有声书':'电台'}</div>`).join('');
+  $('tabs').querySelectorAll('.tab').forEach(t=>t.onclick=()=>{cat=t.dataset.k;render()});
+  let idx=0,html='';list=[];
+  DATA[cat].groups.forEach(([name,items])=>{
+    html+=`<div class="sect"><h2>${name}</h2><small>${items.length} 项</small></div><div class="grid">`;
+    items.forEach(([n,s,d,k])=>{
+      const i=idx++;list.push({n,s,d,k,i});
+      html+=`<div class="card ${current&&current.n===n?'playing':''}" data-i="${i}"><div class="cover">${art(n,i)}</div><div class="name">${n}</div><div class="sub">${s}</div></div>`;
+    });
+    html+='</div>';
+  });
+  $('shelf').innerHTML=html;
+  $('shelf').querySelectorAll('.card').forEach(c=>c.onclick=()=>playItem(list[+c.dataset.i]));
+}
+function playItem(it){
+  current=it;pos=0;playing=true;
+  $('nowName').textContent=it.n;$('nowSub').textContent=it.s;
+  $('mini').innerHTML=art(it.n,it.i);
+  $('t1').textContent=fmt(it.d);
+  $('play').innerHTML='<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
+  render();toast('正在播放 · '+it.n);
+}
+function toast(t){const h=$('hint');h.textContent=t;h.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>h.classList.remove('show'),1800)}
+$('play').onclick=()=>{
+  if(!current){playItem(list[0]);return}
+  playing=!playing;
+  $('play').innerHTML=playing?'<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>':'<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+};
+function step(d){const i=list.indexOf(current);playItem(list[(i+d+list.length)%list.length])}
+$('next').onclick=()=>step(1);$('prev').onclick=()=>step(-1);
+$('focus').onclick=()=>toast('驾驶专注模式 · 原型占位');
+$('track').onclick=e=>{if(!current||!current.d)return;const r=e.currentTarget.getBoundingClientRect();pos=(e.clientX-r.left)/r.width*current.d;};
+document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>{
+  document.querySelectorAll('.nav').forEach(x=>x.classList.remove('on'));n.classList.add('on');
+  const c=n.dataset.cat;if(c==='settings'){toast('设置 · 原型占位');return}
+  cat=c;render();
+});
+setInterval(()=>{
+  const d=new Date();$('clock').textContent=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  if(playing&&current){
+    if(current.d>0){pos+=1;if(pos>=current.d){step(1);return}}
+    $('t0').textContent=fmt(pos);
+    $('seek').style.width=(current.d?pos/current.d*100:0)+'%';
+  }
+},1000);
+render();
+</script>
+</body>
+</html>
