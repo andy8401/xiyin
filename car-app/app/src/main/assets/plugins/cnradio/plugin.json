@@ -5,6 +5,7 @@
   "description": "云听(radio.cn) 电台直播与节目回听：全国 32 个地区 900+ 个电台、按地区/类型浏览、搜索、正在直播的节目名，以及往期节目回听。",
   "main": "index.js",
   "playback": "stream",
+  "icon": "https://www.radio.cn/favicon.ico",
   "minAppVersion": "0.1.8",
   "permissions": {
     "network": [

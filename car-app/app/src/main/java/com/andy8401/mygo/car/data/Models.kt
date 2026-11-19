@@ -1,5 +1,6 @@
 package com.andy8401.mygo.car.data
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Kotlin mirrors of the JSON the Go facade emits (internal/music structs).
@@ -39,6 +40,109 @@ data class BrowseItem(
 data class Section(val title: String, val items: List<BrowseItem>, val morePage: String = "")
 
 data class Browse(val title: String, val subtitle: String = "", val sections: List<Section>)
+
+/**
+ * One locally saved favourite. Favourites are a host concept: they are written
+ * only to the app's own SharedPreferences, never through a plugin's API or the
+ * network, so they survive source updates and work offline.
+ *
+ * [kind] reuses [BrowseItem.Kind]'s name, which lets a stored row be turned
+ * back into a tappable tile without asking the plugin to re-browse. Songs keep
+ * the full Track JSON in [payload], so a saved song plays even if the source
+ * is unreachable at that moment.
+ */
+data class FavoriteItem(
+    val sourceId: String,
+    val kind: String,
+    val itemId: String,
+    val title: String,
+    val subtitle: String = "",
+    val imageUrl: String = "",
+    val payload: String = ""
+) {
+    /** Stable identity: one copy of a given item per source. */
+    val key: String get() = "$sourceId|$kind|$itemId"
+
+    fun toBrowseItem(): BrowseItem = BrowseItem(
+        kind = runCatching { BrowseItem.Kind.valueOf(kind) }.getOrDefault(BrowseItem.Kind.LINK),
+        id = itemId,
+        title = title,
+        subtitle = subtitle,
+        imageUrl = imageUrl,
+        track = if (kind == BrowseItem.Kind.TRACK.name && payload.isNotBlank()) {
+            Json.track(Json.obj(payload))
+        } else null
+    )
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("sourceId", sourceId)
+        .put("kind", kind)
+        .put("itemId", itemId)
+        .put("title", title)
+        .put("subtitle", subtitle)
+        .put("imageUrl", imageUrl)
+        .put("payload", payload)
+
+    companion object {
+        fun fromJson(o: JSONObject?): FavoriteItem? {
+            if (o == null) return null
+            val sourceId = o.optString("sourceId", "")
+            val kind = o.optString("kind", "")
+            val itemId = o.optString("itemId", "")
+            if (sourceId.isBlank() || kind.isBlank() || itemId.isBlank()) return null
+            return FavoriteItem(
+                sourceId = sourceId,
+                kind = kind,
+                itemId = itemId,
+                title = o.optString("title", ""),
+                subtitle = o.optString("subtitle", ""),
+                imageUrl = o.optString("imageUrl", ""),
+                payload = o.optString("payload", "")
+            )
+        }
+    }
+}
+
+/** Turn a browse tile into a storable favourite of the given source. */
+fun BrowseItem.toFavorite(sourceId: String): FavoriteItem = FavoriteItem(
+    sourceId = sourceId,
+    kind = kind.name,
+    itemId = id,
+    title = title,
+    subtitle = subtitle,
+    imageUrl = imageUrl,
+    payload = track?.let(::trackPayload) ?: ""
+)
+
+/** Turn the now-playing track into a storable favourite. */
+fun Track.toFavorite(sourceId: String): FavoriteItem = FavoriteItem(
+    sourceId = sourceId,
+    kind = BrowseItem.Kind.TRACK.name,
+    itemId = id,
+    title = name,
+    subtitle = artistText,
+    imageUrl = imageUrl.ifBlank { album?.imageUrl ?: "" },
+    payload = trackPayload(this)
+)
+
+/** The same Track shape MusicRepository.play() sends back to Go. */
+internal fun trackPayload(t: Track): String {
+    val album = JSONObject()
+        .put("id", t.album?.id ?: "")
+        .put("name", t.album?.name ?: "")
+        .put("imageUrl", t.album?.imageUrl ?: "")
+    val artists = JSONArray()
+    t.artists.forEach { artists.put(JSONObject().put("id", it.id).put("name", it.name)) }
+    return JSONObject()
+        .put("id", t.id)
+        .put("source", t.source)
+        .put("name", t.name)
+        .put("album", album)
+        .put("artists", artists)
+        .put("duration", t.durationMs)
+        .put("imageUrl", t.imageUrl)
+        .toString()
+}
 
 /** One declared setting of a plugin, with its current value (music.Setting + value). */
 data class PluginSetting(
@@ -89,6 +193,8 @@ data class SourceInfo(
     val name: String,
     val version: String = "",
     val playback: String = "",
+    /** Optional favicon/site icon URL declared by the plugin manifest. */
+    val iconUrl: String = "",
     val settings: List<String> = emptyList(),
     val navigation: List<NavItem> = emptyList(),
     /** The plugin exports signIn(): only then may the UI offer 登录. */
@@ -117,7 +223,33 @@ data class SignInPrompt(
     val hasQR: Boolean get() = matrix.isNotEmpty()
 }
 
-data class NavItem(val builtin: String = "", val page: String = "", val name: String = "")
+/**
+ * One category declared by a plugin's `navigation` array.
+ *
+ * Go emits `title` (with optional `name` kept for older manifests) and an
+ * optional `icon` hint. [key] is derived, never stored, so the UI can keep a
+ * stable selection across refreshes without duplicating comparison logic.
+ */
+data class NavItem(
+    val builtin: String = "",
+    val page: String = "",
+    val name: String = "",
+    val icon: String = ""
+) {
+    val key: String get() = listOf(builtin, page, name).joinToString("|")
+
+    /** Builtin-only nav entries may omit `title`; fall back to a Chinese label. */
+    val label: String get() = name.ifBlank {
+        when (builtin) {
+            "home" -> "首页"
+            "liked" -> "我喜欢"
+            "savedAlbums" -> "收藏专辑"
+            "stations" -> "电台"
+            "shows" -> "节目"
+            else -> page.ifBlank { "分类" }
+        }
+    }
+}
 
 data class PlayerState(
     val playing: Boolean = false,
@@ -289,16 +421,29 @@ object Json {
             val nav = o.optJSONArray("navigation")?.let { na ->
                 (0 until na.length()).mapNotNull { j ->
                     val n = na.optJSONObject(j) ?: return@mapNotNull null
-                    NavItem(n.optString("builtin", ""), n.optString("page", ""), n.optString("name", ""))
+                    NavItem(
+                        builtin = n.optString("builtin", ""),
+                        page = n.optString("page", ""),
+                        // music.NavItem serializes the label as "title"; "name"
+                        // is only a fallback for old manifests.
+                        name = n.optString("title", "").ifBlank { n.optString("name", "") },
+                        icon = n.optString("icon", "")
+                    )
                 }
             } ?: emptyList()
             val settings = o.optJSONArray("settings")?.let { sa ->
                 (0 until sa.length()).mapNotNull { j -> sa.optJSONObject(j)?.optString("key", "")?.takeIf { it.isNotBlank() } }
             } ?: emptyList()
             SourceInfo(
-                o.optString("id", ""), o.optString("name", ""), o.optString("version", ""),
-                o.optString("playback", ""), settings, nav,
-                o.optBoolean("signIn", false), o.optBoolean("account", false)
+                id = o.optString("id", ""),
+                name = o.optString("name", ""),
+                version = o.optString("version", ""),
+                playback = o.optString("playback", ""),
+                iconUrl = o.optString("icon", "").ifBlank { o.optString("iconUrl", "") },
+                settings = settings,
+                navigation = nav,
+                canSignIn = o.optBoolean("signIn", false),
+                canAccount = o.optBoolean("account", false)
             )
         }
     }

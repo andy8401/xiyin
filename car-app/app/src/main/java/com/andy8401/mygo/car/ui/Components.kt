@@ -1,6 +1,8 @@
 package com.andy8401.mygo.car.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -200,7 +206,13 @@ fun SectionHeader(title: String, action: String? = null, onAction: () -> Unit = 
 }
 
 @Composable
-fun TrackRow(track: Track, playing: Boolean, onClick: () -> Unit) {
+fun TrackRow(
+    track: Track,
+    playing: Boolean,
+    onClick: () -> Unit,
+    favorite: Boolean = false,
+    onFavorite: (() -> Unit)? = null
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.padding(horizontal = 4.dp)
@@ -213,6 +225,22 @@ fun TrackRow(track: Track, playing: Boolean, onClick: () -> Unit) {
             Text(track.artistText, style = MaterialTheme.typography.bodyMedium,
                 color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (onFavorite != null) {
+            FavoriteButton(favorite, "收藏 ${track.name}", onFavorite)
+        }
+    }
+}
+
+/** Heart toggle shared by rows and tiles. Filled + gold when saved, outline otherwise. */
+@Composable
+private fun FavoriteButton(favorite: Boolean, label: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+        Icon(
+            imageVector = if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+            contentDescription = label,
+            tint = if (favorite) Cyan else TextMuted,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -225,20 +253,32 @@ val TileHeight = 116.dp
 const val TileCover = 88
 
 @Composable
-fun TileItem(item: BrowseItem, onClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.width(120.dp).height(TileHeight).clickable { onClick() }.padding(4.dp)
-    ) {
-        // size() is only a preference: a cramped parent shrinks the cover and
-        // squashes the caption to a few pixels. Claim the height explicitly.
-        CoverImage(item.title, TileCover, Modifier.height(TileCover.dp), imageUrl = item.imageUrl)
-        Spacer(Modifier.height(6.dp))
-        Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (item.subtitle.isNotBlank()) {
-            Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = TextMuted,
+fun TileItem(
+    item: BrowseItem,
+    onClick: () -> Unit,
+    favorite: Boolean = false,
+    onFavorite: (() -> Unit)? = null
+) {
+    Box {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(120.dp).height(TileHeight).clickable { onClick() }.padding(4.dp)
+        ) {
+            // size() is only a preference: a cramped parent shrinks the cover and
+            // squashes the caption to a few pixels. Claim the height explicitly.
+            CoverImage(item.title, TileCover, Modifier.height(TileCover.dp), imageUrl = item.imageUrl)
+            Spacer(Modifier.height(6.dp))
+            Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (item.subtitle.isNotBlank()) {
+                Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = TextMuted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (onFavorite != null) {
+            Box(Modifier.matchParentSize().padding(end = 2.dp), contentAlignment = Alignment.TopEnd) {
+                FavoriteButton(favorite, "收藏 ${item.title}", onFavorite)
+            }
         }
     }
 }
@@ -249,16 +289,28 @@ fun TileItem(item: BrowseItem, onClick: () -> Unit) {
  * shares the width, so it cannot be given a fixed dp size.
  */
 @Composable
-fun RowScope.LibraryTile(item: BrowseItem, onClick: () -> Unit) {
-    Column(
-        Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 6.dp).clickable { onClick() }
-    ) {
-        // 1.7 keeps the caption above the player bar on a 411dp-tall window;
-        // the spec's taller artwork only fits when the bar is hidden.
-        ArtworkImage(item.imageUrl, item.title, Modifier.fillMaxWidth().aspectRatio(1.9f))
-        Spacer(Modifier.height(8.dp))
-        Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+fun RowScope.LibraryTile(
+    item: BrowseItem,
+    onClick: () -> Unit,
+    favorite: Boolean = false,
+    onFavorite: (() -> Unit)? = null
+) {
+    Box(Modifier.weight(1f)) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp).clickable { onClick() }
+        ) {
+            // 1.7 keeps the caption above the player bar on a 411dp-tall window;
+            // the spec's taller artwork only fits when the bar is hidden.
+            ArtworkImage(item.imageUrl, item.title, Modifier.fillMaxWidth().aspectRatio(1.9f))
+            Spacer(Modifier.height(8.dp))
+            Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (onFavorite != null) {
+            Box(Modifier.matchParentSize().padding(end = 2.dp), contentAlignment = Alignment.TopEnd) {
+                FavoriteButton(favorite, "收藏 ${item.title}", onFavorite)
+            }
+        }
     }
 }
 
@@ -267,6 +319,7 @@ fun RowScope.LibraryTile(item: BrowseItem, onClick: () -> Unit) {
  * button on a large car panel; the defaults keep the compact head-unit look
  * on smaller windows and preserve the old call sites.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NavButton(
     icon: ImageVector,
@@ -296,7 +349,12 @@ fun NavButton(
         Spacer(Modifier.height(2.dp))
         // MUSE's rail is icon-led; the label keeps it glanceable on a head unit
         // (and reachable by the UI tests) without a text-heavy bar.
-        Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSize.sp),
-            color = if (selected) Cyan else TextMuted, maxLines = 1)
+        Text(label, style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = labelSize.sp,
+            lineHeight = (labelSize * 1.35f).sp
+        ),
+            color = if (selected) Cyan else TextMuted,
+            maxLines = 1, softWrap = false,
+            modifier = Modifier.basicMarquee())
     }
 }

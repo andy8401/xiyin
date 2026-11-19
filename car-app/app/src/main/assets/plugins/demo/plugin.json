@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "playback": "stream",
+  "icon": "https://www.mygo.app/favicon.ico",
   "permissions": {},
   "settings": [
     {

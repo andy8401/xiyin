@@ -3,6 +3,8 @@
 package com.andy8401.mygo.car.player
 
 import android.content.Context
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -49,8 +51,18 @@ object PlaybackHolder {
         }
         val mediaSourceFactory = DefaultMediaSourceFactory(context.applicationContext)
             .setDataSourceFactory(dataSourceFactory)
+        // Media audio identity + focus handling. handleAudioFocus=true makes
+        // ExoPlayer request AUDIOFOCUS_GAIN before playing (interrupting other
+        // media), pause on LOSS/LOSS_TRANSIENT, resume on GAIN, and abandon the
+        // focus when released. USAGE_MEDIA + CONTENT_TYPE_MUSIC tell the system
+        // (and car head units) that this stream is media playback.
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
         return ExoPlayer.Builder(context.applicationContext)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
     }

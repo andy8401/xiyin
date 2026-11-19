@@ -10,17 +10,22 @@ import com.andy8401.mygo.car.data.AppSettings
 import com.andy8401.mygo.car.data.Account
 import com.andy8401.mygo.car.data.Browse
 import com.andy8401.mygo.car.data.BrowseItem
+import com.andy8401.mygo.car.data.FavoriteItem
+import com.andy8401.mygo.car.data.FavoriteStore
 import com.andy8401.mygo.car.data.Json
 import com.andy8401.mygo.car.data.LyricsText
 import com.andy8401.mygo.car.data.MusicRepository
+import com.andy8401.mygo.car.data.NavItem
 import com.andy8401.mygo.car.data.PlayerState
 import com.andy8401.mygo.car.data.PluginOrigin
 import com.andy8401.mygo.car.data.PluginSetting
 import com.andy8401.mygo.car.data.PluginUpdate
 import com.andy8401.mygo.car.data.SearchResult
+import com.andy8401.mygo.car.data.Section
 import com.andy8401.mygo.car.data.SignInPrompt
 import com.andy8401.mygo.car.data.SourceInfo
 import com.andy8401.mygo.car.data.Track
+import com.andy8401.mygo.car.data.toFavorite
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -61,11 +66,17 @@ class MainViewModel : ViewModel() {
         val version: String = "",
         val sources: List<SourceInfo> = emptyList(),
         val activeSourceId: String = "",
+        /** Category of the active plugin currently shown in the main pane. */
+        val activeNav: NavItem? = null,
         val page: Page = Page.HOME,
         val browse: Browse? = null,
         val search: SearchResult = SearchResult(),
         val query: String = "",
         val player: PlayerState = PlayerState(),
+        /** Host-local collection, keyed by source. Never comes from a plugin. */
+        val favorites: List<FavoriteItem> = emptyList(),
+        /** What the player bar's heart refers to right now (song or station). */
+        val currentPlayable: FavoriteItem? = null,
         val settings: AppSettings = AppSettings(),
         val message: String = "",
         // --- now playing ---
@@ -103,7 +114,7 @@ class MainViewModel : ViewModel() {
         /** The rows the plugin manager renders. Derived, never stored, so a
          *  refresh of any of the three inputs cannot leave the list stale. */
         val plugins: List<PluginRow>
-            get() = sources.map { src ->
+            get() = sources.filter { it.id != LOCAL_ID }.map { src ->
                 val origin = origins.firstOrNull { it.id == src.id }
                 val update = updates.firstOrNull { it.id == src.id }
                 PluginRow(
@@ -117,6 +128,15 @@ class MainViewModel : ViewModel() {
                     updateError = update?.error ?: "",
                     canSignIn = src.canSignIn
                 )
+            }
+
+        /** Key of whatever the player bar would favourite, including tracks
+         *  started by the notification or a playlist outside the current page. */
+        val currentFavoriteKey: String
+            get() = currentPlayable?.key ?: run {
+                val track = player.currentTrack ?: return ""
+                val src = player.pluginId.ifBlank { track.source }.ifBlank { activeSourceId }
+                "$src|TRACK|${track.id}"
             }
     }
 
@@ -143,24 +163,44 @@ class MainViewModel : ViewModel() {
     private val guarded: CoroutineScope
         get() = CoroutineScope(viewModelScope.coroutineContext + guard)
 
+    /** Local library is exposed as a source alongside installed plugins, so
+     *  the driver switches to it from the same plugin dropdown. */
+    private fun localSource(): SourceInfo = SourceInfo(id = LOCAL_ID, name = "本地曲库")
+
+    /** Favourites are owned by the host, not by Go or any plugin. */
+    private var favoriteStore: FavoriteStore? = null
+
     fun init(context: Context) {
         if (_ui.value.ready) return
+        if (favoriteStore == null) favoriteStore = FavoriteStore(context.applicationContext)
+        val savedFavorites = favoriteStore!!.all()
         guarded.launch {
             val count = GoBridge.init(context)
             GoBridge.startPlaybackService(context)
-            val sources = MusicRepository.sources()
+            val plugins = MusicRepository.sources()
+            // Local library is a source of its own, not a category inside every
+            // plugin. Keep it last so a real plugin stays the default.
+            val sources = plugins + localSource()
             val settings = MusicRepository.appSettings()
             val player = MusicRepository.queue()
+            val firstPlugin = plugins.firstOrNull()
+            val useLocal = firstPlugin == null
+            val activeId = firstPlugin?.id ?: LOCAL_ID
+            val localBrowse = if (useLocal) runCatching { MusicRepository.localTracks() }.getOrNull() else null
             _ui.value = _ui.value.copy(
                 ready = true,
                 version = MusicRepository.version(),
                 sources = sources,
-                activeSourceId = sources.firstOrNull()?.id ?: "",
+                activeSourceId = activeId,
+                activeNav = defaultNav(firstPlugin),
+                page = if (useLocal) Page.LIBRARY else Page.HOME,
+                browse = localBrowse,
                 player = player,
+                favorites = savedFavorites,
                 settings = settings,
-                message = "已加载 $count 个音源"
+                message = if (useLocal) "未安装插件，已显示本地曲库" else "已加载 $count 个音源"
             )
-            refreshBrowse()
+            if (!useLocal) refreshBrowse()
             refreshPluginMeta()
             refreshAccounts()
         }
@@ -195,7 +235,17 @@ class MainViewModel : ViewModel() {
             // event only moves the cursor.
             "track" -> guarded.launch {
                 val player = MusicRepository.queue()
-                _ui.value = _ui.value.copy(player = player)
+                val now = player.currentTrack
+                val src = player.pluginId.ifBlank { now?.source ?: "" }
+                // A station's queue rows are a moving window of programmes; the
+                // thing the driver favourited is the station itself, so keep it.
+                val keepStation = player.stationId.isNotBlank() &&
+                    _ui.value.currentPlayable?.kind == BrowseItem.Kind.STATION.name
+                _ui.value = _ui.value.copy(
+                    player = player,
+                    currentPlayable = if (keepStation) _ui.value.currentPlayable
+                        else now?.let { it.toFavorite(src) }
+                )
                 loadLyricsFor(player)
             }
             "playing", "state" -> guarded.launch {
@@ -221,19 +271,41 @@ class MainViewModel : ViewModel() {
      * instead of showing a source that no longer exists.
      */
     private suspend fun afterPluginListChanged() {
-        val sources = MusicRepository.sources()
+        val plugins = MusicRepository.sources()
+        val sources = plugins + localSource()
         val origins = runCatching { MusicRepository.pluginOrigins() }.getOrDefault(_ui.value.origins)
-        val stillThere = sources.any { it.id == _ui.value.activeSourceId }
-        val active = if (stillThere) _ui.value.activeSourceId else sources.firstOrNull()?.id ?: ""
+        val oldActive = _ui.value.activeSourceId
+        val activeIsLocal = oldActive == LOCAL_ID
+        val pluginStillThere = plugins.any { it.id == oldActive }
+        val active = when {
+            activeIsLocal -> LOCAL_ID
+            pluginStillThere -> oldActive
+            plugins.isNotEmpty() -> plugins.first().id
+            else -> LOCAL_ID
+        }
+        val activeSource = sources.firstOrNull { it.id == active }
+        val currentNav = _ui.value.activeNav
+        val nav = if (currentNav != null && activeSource?.navigation?.any { it.key == currentNav.key } == true) {
+            currentNav
+        } else {
+            defaultNav(activeSource)
+        }
         _ui.value = _ui.value.copy(
             sources = sources,
             origins = origins,
             activeSourceId = active,
+            activeNav = nav,
             // Drop update rows for plugins that are gone.
-            updates = _ui.value.updates.filter { u -> sources.any { it.id == u.id } }
+            updates = _ui.value.updates.filter { u -> plugins.any { it.id == u.id } }
         )
-        if (!stillThere) {
-            _ui.value = _ui.value.copy(browse = Browse(title = "", sections = emptyList()))
+        if (active == LOCAL_ID) {
+            val local = runCatching { MusicRepository.localTracks() }.getOrNull()
+            _ui.value = _ui.value.copy(page = Page.LIBRARY, activeNav = null, browse = local)
+        } else if (!pluginStillThere && !activeIsLocal) {
+            _ui.value = _ui.value.copy(
+                page = Page.HOME,
+                browse = Browse(title = "", sections = emptyList())
+            )
             refreshBrowse()
         }
         // A freshly installed source may already have an account (its own
@@ -319,16 +391,69 @@ class MainViewModel : ViewModel() {
         _ui.value = _ui.value.copy(signInPrompt = null)
     }
 
+    /** Default category is the plugin's built-in home, or its first declared item. */
+    private fun defaultNav(source: SourceInfo?): NavItem? =
+        source?.navigation?.firstOrNull { it.builtin == "home" }
+            ?: source?.navigation?.firstOrNull()
+
+    /**
+     * Go facade maps an empty page (and "home") to a plugin's Home(). Builtin
+     * categories are app-level concepts, so plugin page ids differ: cnradio's
+     * builtin "stations" is Browse("all"), while another source may answer
+     * Browse("stations"). Try the known ids in order and fall back to Home.
+     */
+    private fun navPageCandidates(item: NavItem?): List<String> = when {
+        item == null || item.builtin == "home" -> listOf("")
+        item.builtin == "stations" -> listOf("all", "stations", "")
+        item.builtin.isNotBlank() -> listOf(item.builtin, "")
+        item.page.isNotBlank() -> listOf(item.page)
+        else -> listOf("")
+    }
+
     suspend fun refreshBrowse() {
         val id = _ui.value.activeSourceId
+        val nav = _ui.value.activeNav
+        val expectedKey = nav?.key
         if (id.isBlank()) return
+        // 收藏 is a host-side category: never sent to the plugin's browse().
+        if (nav?.builtin == FAVORITES_NAV_ID) {
+            if (id == _ui.value.activeSourceId) {
+                _ui.value = _ui.value.copy(browse = favoritesBrowse(id))
+            }
+            return
+        }
+        if (id == LOCAL_ID) {
+            val local = try {
+                MusicRepository.localTracks()
+            } catch (e: Exception) {
+                if (id == _ui.value.activeSourceId) {
+                    _ui.value = _ui.value.copy(
+                        browse = Browse(title = "", sections = emptyList()),
+                        message = "本地曲库加载失败：${e.message ?: "未知错误"}"
+                    )
+                }
+                return
+            }
+            if (id == _ui.value.activeSourceId) _ui.value = _ui.value.copy(browse = local)
+            return
+        }
         val browse = try {
-            MusicRepository.browse(id, "")
+            var result: Browse? = null
+            var lastFailure: Exception? = null
+            for (page in navPageCandidates(nav)) {
+                try {
+                    result = MusicRepository.browse(id, page)
+                    break
+                } catch (e: Exception) {
+                    lastFailure = e
+                }
+            }
+            result ?: throw (lastFailure ?: IllegalStateException("没有可打开的页面"))
         } catch (e: Exception) {
             // A source that times out must not leave the page on "加载中…"
             // forever, and must not escape to the guard as a bare toast either:
             // the user needs both the empty state and the reason.
-            if (id == _ui.value.activeSourceId) {
+            if (id == _ui.value.activeSourceId && expectedKey == _ui.value.activeNav?.key) {
                 _ui.value = _ui.value.copy(
                     browse = Browse(title = "", sections = emptyList()),
                     message = "加载失败：${e.message ?: "未知错误"}"
@@ -336,16 +461,29 @@ class MainViewModel : ViewModel() {
             }
             return
         }
-        // A network source can answer after the user has already switched away;
-        // dropping the late result keeps the header and the content in step.
-        if (id != _ui.value.activeSourceId) return
+        // A network source can answer after the user has already switched plugin
+        // or category; dropping the late result keeps the header and content in step.
+        if (id != _ui.value.activeSourceId || expectedKey != _ui.value.activeNav?.key) return
         _ui.value = _ui.value.copy(browse = browse)
     }
 
     fun selectSource(id: String) {
         if (id == _ui.value.activeSourceId) return
+        val source = _ui.value.sources.firstOrNull { it.id == id }
+        if (id == LOCAL_ID) {
+            _ui.value = _ui.value.copy(
+                activeSourceId = id,
+                activeNav = null,
+                page = Page.LIBRARY,
+                query = "",
+                browse = Browse(title = "", sections = emptyList())
+            )
+            guarded.launch { refreshBrowse() }
+            return
+        }
         _ui.value = _ui.value.copy(
             activeSourceId = id,
+            activeNav = defaultNav(source),
             page = Page.HOME,
             query = "",
             // Clear the old source's shelves instead of showing them under the
@@ -353,6 +491,76 @@ class MainViewModel : ViewModel() {
             browse = Browse(title = "", sections = emptyList())
         )
         guarded.launch { refreshBrowse() }
+    }
+
+    /** Select a category declared by the active plugin's navigation array. */
+    fun selectNav(item: NavItem) {
+        val id = _ui.value.activeSourceId
+        if (id.isBlank()) return
+        _ui.value = _ui.value.copy(
+            activeNav = item,
+            page = Page.HOME,
+            query = "",
+            browse = Browse(title = item.label, sections = emptyList())
+        )
+        guarded.launch { refreshBrowse() }
+    }
+
+    // ---------------------------------------------------------------- favourites
+
+    /** Build the contents of a source's 收藏 category entirely from local rows. */
+    private fun favoritesBrowse(sourceId: String): Browse {
+        val rows = _ui.value.favorites.filter { it.sourceId == sourceId }
+        return Browse(
+            title = "收藏",
+            subtitle = "仅保存在本机 · 共 ${rows.size} 项",
+            sections = if (rows.isEmpty()) emptyList()
+            else listOf(Section("我的收藏", rows.map { it.toBrowseItem() }))
+        )
+    }
+
+    /** Select the fixed 收藏 category appended to every source's navigation. */
+    fun selectFavoriteNav() {
+        val source = _ui.value.activeSourceId
+        if (source.isBlank()) return
+        _ui.value = _ui.value.copy(
+            activeNav = NavItem(builtin = FAVORITES_NAV_ID, name = "收藏", icon = "favorite"),
+            page = Page.HOME,
+            query = "",
+            browse = favoritesBrowse(source)
+        )
+    }
+
+    fun isFavorite(key: String): Boolean =
+        key.isNotBlank() && _ui.value.favorites.any { it.key == key }
+
+    /** Save or remove one row. No plugin is contacted; only local storage changes. */
+    fun toggleFavorite(item: FavoriteItem) {
+        val store = favoriteStore ?: return
+        if (item.itemId.isBlank() || item.title.isBlank()) return
+        val added = store.toggle(item)
+        val next = _ui.value.copy(
+            favorites = store.all(),
+            message = if (added) "已收藏「${item.title}」" else "已取消收藏"
+        )
+        // Standing on the 收藏 page? Rebuild it so a removed row vanishes at once.
+        _ui.value = if (next.activeNav?.builtin == FAVORITES_NAV_ID) {
+            next.copy(browse = favoritesBrowse(next.activeSourceId))
+        } else next
+    }
+
+    /** The player bar's heart: favourites whatever is actually playing. */
+    fun toggleCurrentFavorite() {
+        val item = _ui.value.currentPlayable ?: run {
+            val track = _ui.value.player.currentTrack
+            if (track == null) {
+                _ui.value = _ui.value.copy(message = "当前没有可收藏的内容")
+                return
+            }
+            val src = _ui.value.player.pluginId.ifBlank { track.source }.ifBlank { _ui.value.activeSourceId }
+            track.toFavorite(src)
+        }
+        toggleFavorite(item)
     }
 
     fun navigate(page: Page) {
@@ -453,9 +661,12 @@ class MainViewModel : ViewModel() {
     /** Play a Browse item. Tracks play; stations start live; other kinds open their page. */
     fun playItem(item: BrowseItem) {
         val detail = detailKind(item.kind)
+        val source = _ui.value.activeSourceId
         when {
-            item.kind == BrowseItem.Kind.TRACK && item.track != null -> playTrack(item.track)
-            item.kind == BrowseItem.Kind.STATION && item.id.isNotBlank() -> playStation(item)
+            item.kind == BrowseItem.Kind.TRACK && item.track != null ->
+                playTrack(item.track, favoriteSource = source)
+            item.kind == BrowseItem.Kind.STATION && item.id.isNotBlank() ->
+                playStation(item, favoriteSource = source)
             detail != null && item.id.isNotBlank() -> openDetail(detail, item.id)
             // A Link carries the page it points at ("rank", "categories",
             // "search:kw"); an empty id is a description with nowhere to go.
@@ -468,8 +679,9 @@ class MainViewModel : ViewModel() {
      * cnradio's station tiles carry ids like live:<broadcast>, which are not
      * Browse page ids. They must go through StationNext, not Browse.
      */
-    private fun playStation(item: BrowseItem) {
-        val source = _ui.value.activeSourceId
+    private fun playStation(item: BrowseItem, favoriteSource: String = "") {
+        val source = favoriteSource.ifBlank { _ui.value.activeSourceId }
+        _ui.value = _ui.value.copy(currentPlayable = item.toFavorite(source))
         guarded.launch {
             runCatching { MusicRepository.playStation(source, item.id) }
                 .onSuccess {
@@ -484,8 +696,9 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun playTrack(track: Track, queue: List<Track> = listOf(track)) {
+    fun playTrack(track: Track, queue: List<Track> = listOf(track), favoriteSource: String = "") {
         val source = track.source.ifBlank { _ui.value.activeSourceId }
+        _ui.value = _ui.value.copy(currentPlayable = track.toFavorite(favoriteSource.ifBlank { source }))
         guarded.launch {
             val start = queue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
             MusicRepository.play(source, queue, start)
@@ -552,7 +765,13 @@ class MainViewModel : ViewModel() {
         runCatching { MusicRepository.playAt(index) }
             .onSuccess {
                 val player = MusicRepository.queue()
-                _ui.value = _ui.value.copy(player = player, message = "切换到第 ${index + 1} 首")
+                val now = player.currentTrack
+                val src = player.pluginId.ifBlank { now?.source ?: "" }
+                _ui.value = _ui.value.copy(
+                    player = player,
+                    currentPlayable = now?.let { it.toFavorite(src) },
+                    message = "切换到第 ${index + 1} 首"
+                )
                 loadLyricsFor(player)
             }
             .onFailure { e ->
@@ -698,7 +917,10 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    private companion object {
+    companion object {
+        const val LOCAL_ID = "local"
+        /** Builtin id of the host-owned 收藏 category shown for every source. */
+        const val FAVORITES_NAV_ID = "favorites"
         /** Must match facade/detail.go's detailKinds(). */
         val DETAIL_KINDS = setOf("show", "album", "artist", "playlist")
     }
