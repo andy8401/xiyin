@@ -4,6 +4,14 @@
 用 Media3/ExoPlayer 替换桌面端 `mygo/audio`（方案 B：Go 只解析 `music.Stream{URL, Headers}`，
 Media3 负责下载/解封装/解码）。
 
+## 当前状态（2026-11-19，v0.1.2）
+
+- 默认插件：`cnradio` + `ximalaya-web`；`demo` 不再随包分发，仍可从 zip / 仓库自行安装。
+- 版本：`versionCode=3` / `versionName=0.1.2`；发布包见 [Release v0.1.2](https://github.com/andy8401/xiyin/releases/tag/v0.1.2)。
+- 签名：v1 + v2 + v3；车机“无法检验签名”已修复。核验：`apksigner verify --verbose --min-sdk-version 18 <apk>`（默认按 `minSdk=24` 核验会漏报 v1）。
+- UI：在线封面优先 / 本地 `MuseCover` 兜底；按插件隔离的本地收藏；插件化左侧分类 + 站点图标；本地曲库独立音源；16:9 默认布局 + 底部系统栏避让；播放使用 `USAGE_MEDIA` 音频焦点；3:2 横版启动图标。
+- 下方“阶段 D … J”内容为历史设计与验证记录，凡涉及插件数量 / 版本号 / 签名方案的表述，以上述当前状态为准。
+
 ## 构建
 
 ```bash
@@ -34,13 +42,13 @@ bash build.sh clean
 - `minSdk = 24`：与 AAR 的 `-androidapi 24` 对齐；AAR 只含 `arm64-v8a` JNI，故 `abiFilters` 限定 arm64-v8a。
 - `targetSdk = 35`，`compileSdk = 35`；AGP 8.5.2 对 35 有警告，已在 `gradle.properties` 用 `android.suppressUnsupportedCompileSdk=35` 抑制（Gradle 8.7 与 AGP 8.5.2 是兼容上界）。
 - AAR 通过 `implementation(files("../../build/mygobridge.aar"))` 引入，**不修改 AGPL 原仓库**。
-- 三个插件源码放在 `app/src/main/assets/plugins/`，运行时由 `GoBridge` 递归复制到 `filesDir/plugins`，因为 Go 侧 `plugin.Discover` 扫描的是 `<dataDir>/plugins`。
+- 默认插件源码放在 `app/src/main/assets/plugins/`：**只有 `cnradio` 与 `ximalaya-web`**，`demo` 已移除。首次安装由 `GoBridge` 递归复制到 `filesDir/plugins`（Go 侧 `plugin.Discover` 扫描 `<dataDir>/plugins`）；升级时保留用户已装插件，不覆盖。
 
 ## MUSE 视觉系统（阶段 K）
 
 主题取自《音乐播放器 UI 重设计.pdf》：炭黑 `#0F0E0E` / 暖金 `#E8C268` / 纸白 `#F2F2F2` / 深棕 `#2E2620`。
-`CarColors.Cyan` 是暖金的兼容别名。封面图案由 `Canvas` 离线绘制（声纹同心圆 / 波浪 / 斜切圆 / 山脊），
-不拉网络图片。播放页为「大封面 + 中央信息与进度 + 右侧队列」三栏；歌词页用深棕渐变底与大字高亮；
+`CarColors.Cyan` 是暖金的兼容别名。封面图案由 `Canvas` 离线绘制（声纹同心圆 / 波浪 / 斜切圆 / 山脊）作为兜底；
+插件返回 `imageUrl` 时优先用 Coil 加载在线封面，失败或为空才回退离线 `MuseCover`。播放页为「大封面 + 中央信息与进度 + 右侧队列」三栏；歌词页用深棕渐变底与大字高亮；
 播放页右上「专注」进入全屏驾驶模式，右上「退出专注」返回。
 车机窗口只有 411dp 高，故卡片改为 5 列、比例 1.9（设计稿为 4 列 / 1.35），确保标题不被播放条裁掉。
 
@@ -91,8 +99,8 @@ Media3 1.4.1 的 `MediaItem.Builder` **没有** `setHeaders()`（这是首轮编
 ## 冒烟步骤（需 arm64 真机或车机）
 
 1. 安装 `app-debug.apk`。
-2. 点 **① 初始化 Go 桥接**：复制插件、注入 HostBridge/MediaOutput/Listener、`Facade.init` 应返回 3。
-3. 点 **② 列出插件**：应见 demo / cnradio / ximalaya-web，并自动选中首个。
+2. 点 **① 初始化 Go 桥接**：复制插件、注入 HostBridge/MediaOutput/Listener；默认安装下 `Facade.init` 应返回 2（若曾自行安装 demo 则为 3）。
+3. 点 **② 列出插件**：默认应见 cnradio / ximalaya-web，并自动选中首个；demo 不再随包内置。
 4. 点 **③ Browse**：查看返回 JSON；若选中插件首页无 tracks，任选其他插件。
 5. 点 **④ 播放 Browse 第一首**：走完整 Go → Media3 链路，观察是否出声、`Last event` 是否出现 `track` 事件。
 6. 点 **⑤ 直连本地 tone.mp3**：绕过 Go 直接验证 Media3 与音频焦点，用于定位问题是桥接还是播放器。
@@ -190,11 +198,13 @@ bash make-keystore.sh          # 写入 keystore/mygocar-release.jks + keystore.
 
 ```bash
 bash build.sh assembleRelease
-$ANDROID_HOME/build-tools/34.0.0/apksigner.bat verify --print-certs \
-  app/build/outputs/apk/release/app-release.apk
+$ANDROID_HOME/build-tools/35.0.0/apksigner.bat verify --verbose --min-sdk-version 18 \
+  --print-certs app/build/outputs/apk/release/app-release.apk
 ```
 
-期望：`Verifies` 为真、`v2 scheme: true`、DN 为 `CN=MyGo Car (AGPL fork), O=andy8401`。
+期望：`Verifies` 为真，`v1 / v2 / v3 scheme` 均为 `true`，DN 为 `CN=MyGo Car (AGPL fork), O=andy8401`。
+`--min-sdk-version 18` 必须显式给出：默认按 `minSdk=24` 核验不会列出 v1 JAR 签名，而车机 ROM 依赖 v1。
+若 Gradle 产物未带 v1，可用 `apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true` 补签。
 
 ### 3. 明文流量策略（改动前务必读完）
 
@@ -231,7 +241,7 @@ bash build.sh connectedDebugAndroidTest -Pemulator
 分发 APK 时必须同时提供 `mygo-music/` + `android-bridge/` + `car-app/` 完整源码，
 并保留 `LICENSE` 与 `NOTICE.md`。App 内「设置 → 关于」显示 fork 来源、上游仓库和双版本号。
 
-> **两个版本号别混**：`versionName`（本 App，0.1.0，可随发布递增）与
+> **两个版本号别混**：`versionName`（本 App，当前 0.1.2，可随发布递增）与
 > Go facade 的 `appVersion`（宿主能力版本，0.1.25）是两回事。后者是插件比对
 > `minAppVersion` 的依据（ximalaya-web 要求 ≥ 0.1.20），**调低会让插件拒绝加载**。
 
@@ -360,6 +370,6 @@ Go facade 的每个方法都可能抛：插件超时（`the plugin didn't answer
 - WebView 登录需真机验证 `until` cookie 判定与各站点登录流程；Cookie 仅存在于本次 WebView 会话，未做跨会话持久化。
 - `installPluginFromRepo` 打 GitHub API，真机网络可达性 / 代理环境需验证；本机单测不打真实网络。
 - App Link 用自定义 scheme `mygocar://`；正式发布可加 `https` App Link + 域名验证。
-- 本地曲库仍为空：`AddLocalFolders` 需要真实路径，SAF 只给 `content://`，Android 侧尚未接 MediaStore。
-- 仓库安装/更新只在「无网络可装的真实仓库」下未实测（本轮 3 个插件都是 assets 内置）；安装链路本身已由 SAF 拉起与 Go 单测覆盖。
+- 本地曲库已作为独立合成音源 `local` 接入（见「当前状态」）；但 `AddLocalFolders` 仍需真实路径，SAF 只给 `content://`，Android 侧尚未接 MediaStore。
+- 仓库安装/更新只在「无网络可装的真实仓库」下未实测（默认包内 2 个插件为 assets 内置）；安装链路本身已由 SAF 拉起与 Go 单测覆盖。
 
