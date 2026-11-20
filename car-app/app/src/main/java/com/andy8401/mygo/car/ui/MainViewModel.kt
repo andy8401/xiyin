@@ -209,6 +209,10 @@ class MainViewModel : ViewModel() {
         guarded.launch {
             val count = GoBridge.init(context)
             GoBridge.startPlaybackService(context)
+            // The release build seeds both default plugins from GitHub repos.
+            // Repo installs carry .origin.json, so 检查更新 can keep them current;
+            // assets are only an offline first-boot fallback in GoBridge.
+            val installFailures = ensureDefaultPlugins()
             val plugins = MusicRepository.sources()
             // Local library is a source of its own, not a category inside every
             // plugin. Keep it last so a real plugin stays the default.
@@ -230,7 +234,12 @@ class MainViewModel : ViewModel() {
                 player = player,
                 favorites = savedFavorites,
                 settings = settings,
-                message = if (useLocal) "未安装插件，已显示本地曲库" else "已加载 $count 个音源"
+                message = when {
+                    installFailures.isNotEmpty() ->
+                        "默认插件已用内置版本启动（${installFailures.joinToString("、")}安装失败），可在插件管理中重试"
+                    useLocal -> "未安装插件，已显示本地曲库"
+                    else -> "已加载 $count 个音源"
+                }
             )
             if (!useLocal) refreshBrowse()
             refreshPluginMeta()
@@ -240,6 +249,43 @@ class MainViewModel : ViewModel() {
             MusicRepository.events.collect { event -> handleEvent(event) }
         }
         consumeInstallLink()
+    }
+
+    /**
+     * Seed both default plugins from their GitHub repos. Repo installs carry
+     * .origin.json, so 检查更新 can keep them current; the assets copy in
+     * GoBridge is only an offline first-boot fallback. Repos already installed
+     * are skipped, so an offline boot neither blocks nor re-downloads anything.
+     * Failures are returned for a UI hint and retried on the next boot.
+     */
+    private suspend fun ensureDefaultPlugins(): List<String> {
+        val context = appContext ?: return emptyList()
+        val prefs = context.getSharedPreferences("mygocar_default_plugins", Context.MODE_PRIVATE)
+        // Seeded once: a user who later uninstalls a default plugin keeps it
+        // uninstalled, and 检查更新 still handles upgrades from its repo.
+        if (prefs.getBoolean(SEEDED_KEY, false)) return emptyList()
+        val installedRepos = runCatching { MusicRepository.pluginOrigins() }
+            .getOrDefault(emptyList())
+            .map { it.repo }
+            .toSet()
+        val missing = DEFAULT_PLUGIN_REPOS.filter { repo ->
+            installedRepos.none { it.equals(repo, ignoreCase = true) }
+        }
+        if (missing.isEmpty()) {
+            prefs.edit().putBoolean(SEEDED_KEY, true).apply()
+            return emptyList()
+        }
+        val failures = mutableListOf<String>()
+        for (repo in missing) {
+            when (PluginInstaller.installFromRepo(repo)) {
+                is PluginInstaller.Result.Ok -> Unit
+                is PluginInstaller.Result.Failed -> failures += repo
+            }
+        }
+        // Only mark done when both succeeded; a later boot retries so an
+        // offline first start does not permanently lose the repo installs.
+        if (failures.isEmpty()) prefs.edit().putBoolean(SEEDED_KEY, true).apply()
+        return failures
     }
 
     /** Consume a mygocar://install?repo=... link once the bridge is ready. */
@@ -1288,6 +1334,13 @@ class MainViewModel : ViewModel() {
         const val LOCAL_ID = "local"
         /** Builtin id of the host-owned 收藏 category shown for every source. */
         const val FAVORITES_NAV_ID = "favorites"
+
+        /** Release builds seed these two plugins from GitHub on first boot. */
+        val DEFAULT_PLUGIN_REPOS = listOf(
+            "andy8401/mygo-music-cnradio",
+            "andy8401/mygo-ximalaya-web-plugin"
+        )
+        private const val SEEDED_KEY = "github_defaults_seeded"
         /** Must match facade/detail.go's detailKinds(). */
         val DETAIL_KINDS = setOf("show", "album", "artist", "playlist")
     }
