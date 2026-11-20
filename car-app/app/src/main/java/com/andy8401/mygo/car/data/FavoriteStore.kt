@@ -36,6 +36,43 @@ class FavoriteStore(context: Context) {
         !existed
     }
 
+    /** Channel rows a folder contributed. Reads snapshot, no plugin contact. */
+    fun byFolder(sourceId: String, folder: String): List<FavoriteItem> = synchronized(this) {
+        rows.filter { it.sourceId == sourceId && it.folder == folder }.toList()
+    }
+
+    /**
+     * Add every row that is not already saved. Used when favouriting a folder:
+     * its channels must not silently un-favourite a station the driver already
+     * saved from somewhere else. Returns how many were actually new.
+     */
+    fun addIfAbsent(items: List<FavoriteItem>): Int = synchronized(this) {
+        val existing = rows.map { it.key }.toSet()
+        val fresh = items.filter { it.key !in existing }
+        if (fresh.isNotEmpty()) {
+            rows.addAll(0, fresh)
+            write()
+        }
+        fresh.size
+    }
+
+    /** Remove all rows a folder contributed. Returns how many were removed. */
+    fun removeByFolder(sourceId: String, folder: String): Int = synchronized(this) {
+        val before = rows.size
+        rows.removeAll { it.sourceId == sourceId && it.folder == folder }
+        val removed = before - rows.size
+        if (removed > 0) write()
+        removed
+    }
+
+    /** Drop the old, useless "saved folder" row once its channels are saved. */
+    fun removeLinkRow(sourceId: String, itemId: String): Unit = synchronized(this) {
+        if (rows.removeAll {
+                it.sourceId == sourceId && it.itemId == itemId &&
+                    it.kind == com.andy8401.mygo.car.data.BrowseItem.Kind.LINK.name
+            }) write()
+    }
+
     /** Called when a plugin is uninstalled so its favourites cannot linger. */
     fun removeSource(sourceId: String): Unit = synchronized(this) {
         if (rows.removeAll { it.sourceId == sourceId }) write()

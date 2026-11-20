@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: 希音 声纹探索 concentric rings, centred inside
+     the 66dp safe zone of the 108dp adaptive canvas. Deep gold on light base. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- outer ring -->
+    <path
+        android:pathData="M 54,33 a 21,21 0 1,1 0,42 a 21,21 0 1,1 0,-42"
+        android:strokeColor="#6BA8801C"
+        android:strokeWidth="1.9"
+        android:fillColor="@android:color/transparent" />
+    <!-- middle ring -->
+    <path
+        android:pathData="M 54,39.7 a 14.3,14.3 0 1,1 0,28.6 a 14.3,14.3 0 1,1 0,-28.6"
+        android:strokeColor="#9EA8801C"
+        android:strokeWidth="1.9"
+        android:fillColor="@android:color/transparent" />
+    <!-- inner ring -->
+    <path
+        android:pathData="M 54,46 a 8,8 0 1,1 0,16 a 8,8 0 1,1 0,-16"
+        android:strokeColor="#D9A8801C"
+        android:strokeWidth="1.9"
+        android:fillColor="@android:color/transparent" />
+    <!-- solid sound source -->
+    <path
+        android:pathData="M 54,50.4 a 3.6,3.6 0 1,1 0,7.2 a 3.6,3.6 0 1,1 0,-7.2"
+        android:fillColor="#FFA8801C" />
+</vector>

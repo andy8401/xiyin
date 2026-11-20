@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon background layer: near-white base matching 视频/声屿 tiles.
+     The launcher's own mask clips this to the device icon shape. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#F4F6F8" />
+</shape>

@@ -4,8 +4,10 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.andy8401.mygo.car.bridge.AppUpdater
 import com.andy8401.mygo.car.bridge.GoBridge
 import com.andy8401.mygo.car.bridge.PluginInstaller
+import com.andy8401.mygo.car.BuildVersion
 import com.andy8401.mygo.car.data.AppSettings
 import com.andy8401.mygo.car.data.Account
 import com.andy8401.mygo.car.data.Browse
@@ -39,10 +41,27 @@ import kotlinx.coroutines.launch
  *  renders snapshots and forwards user actions. */
 class MainViewModel : ViewModel() {
 
-    enum class Page { HOME, BROWSE, SEARCH, LIBRARY, PLUGINS, SETTINGS }
+    enum class Page { HOME, BROWSE, SEARCH, LIBRARY, PLUGINS, SETTINGS, SUPPORT }
+
+    /** Snapshot of the screen a detail page was opened from, so BACK can step
+     *  back through nested folders to the original category. */
+    data class BrowseBackEntry(
+        val page: Page,
+        val browse: Browse?,
+        val activeNav: NavItem?
+    )
 
     /** The two panes of the now-playing screen. */
     enum class PlayerPane { LYRICS, QUEUE }
+
+    /** A published app release that is newer than [BuildVersion.Name]. */
+    data class AppUpdateInfo(
+        val version: String,
+        val notes: String,
+        val downloadUrl: String,
+        val pageUrl: String,
+        val assetName: String
+    )
 
     /** One row of the plugin manager: the loaded plugin plus where it came from
      *  and whether GitHub offers a newer release. */
@@ -70,11 +89,19 @@ class MainViewModel : ViewModel() {
         val activeNav: NavItem? = null,
         val page: Page = Page.HOME,
         val browse: Browse? = null,
+        /** Stack of screens pushed when opening a detail/folder page. */
+        val browseBackStack: List<BrowseBackEntry> = emptyList(),
         val search: SearchResult = SearchResult(),
         val query: String = "",
         val player: PlayerState = PlayerState(),
         /** Host-local collection, keyed by source. Never comes from a plugin. */
         val favorites: List<FavoriteItem> = emptyList(),
+        /** True while 收藏 → 全部播放 is expanding rows into the queue. */
+        val favoritePlayAllRunning: Boolean = false,
+        /** True while a card's ▶ is expanding that item into the queue. */
+        val browseItemPlayAllRunning: Boolean = false,
+        /** True while a folder's heart is expanding its channels into favourites. */
+        val folderFavoriteRunning: Boolean = false,
         /** What the player bar's heart refers to right now (song or station). */
         val currentPlayable: FavoriteItem? = null,
         val settings: AppSettings = AppSettings(),
@@ -85,7 +112,6 @@ class MainViewModel : ViewModel() {
         val playerOpen: Boolean = false,
         val playerPane: PlayerPane = PlayerPane.LYRICS,
         /** Minimal driving view: one title, one play button, one progress bar. */
-        val focusMode: Boolean = false,
         /** 播放界面（首页）是否最大化到 32:9 超宽。默认 16:9；离开播放页自动还原。 */
         val maximized: Boolean = false,
         val lyrics: LyricsText? = null,
@@ -96,6 +122,10 @@ class MainViewModel : ViewModel() {
         val origins: List<PluginOrigin> = emptyList(),
         val updates: List<PluginUpdate> = emptyList(),
         val updatesRunning: Boolean = false,
+        // --- app self-update ---
+        val appUpdateChecking: Boolean = false,
+        val appUpdate: AppUpdateInfo? = null,
+        val appUpdateDownloading: Boolean = false,
         /** Non-empty while an install or update check is in flight. */
         val busy: String = "",
         /** Plugin whose settings form is open; empty when the form is closed. */
@@ -169,9 +199,11 @@ class MainViewModel : ViewModel() {
 
     /** Favourites are owned by the host, not by Go or any plugin. */
     private var favoriteStore: FavoriteStore? = null
+    private var appContext: Context? = null
 
     fun init(context: Context) {
         if (_ui.value.ready) return
+        appContext = context.applicationContext
         if (favoriteStore == null) favoriteStore = FavoriteStore(context.applicationContext)
         val savedFavorites = favoriteStore!!.all()
         guarded.launch {
@@ -501,7 +533,8 @@ class MainViewModel : ViewModel() {
             activeNav = item,
             page = Page.HOME,
             query = "",
-            browse = Browse(title = item.label, sections = emptyList())
+            browse = Browse(title = item.label, sections = emptyList()),
+            browseBackStack = emptyList()
         )
         guarded.launch { refreshBrowse() }
     }
@@ -527,7 +560,8 @@ class MainViewModel : ViewModel() {
             activeNav = NavItem(builtin = FAVORITES_NAV_ID, name = "收藏", icon = "favorite"),
             page = Page.HOME,
             query = "",
-            browse = favoritesBrowse(source)
+            browse = favoritesBrowse(source),
+            browseBackStack = emptyList()
         )
     }
 
@@ -549,6 +583,64 @@ class MainViewModel : ViewModel() {
         } else next
     }
 
+    /**
+     * A folder card (region:/cat:) favourites the CHANNELS inside it, never the
+     * folder row itself — a folder is just a page jump and is useless saved.
+     *
+     *  - First tap: expand the folder page, save its stations with a `folder`
+     *    tag (addIfAbsent so an already-saved station is not lost).
+     *  - Second tap: drop every row carrying that folder tag.
+     *
+     * A region page lists local stations first and then "National stations
+     * (available everywhere)" as a second section. Favouriting a region saves
+     * ONLY its own local section — national channels would otherwise be saved
+     * 30+ times, once per region. A category (cat:) page has one section and
+     * is taken whole.
+     *
+     * Both the tag and the toggle are host-side; the plugin is read-only here.
+     */
+    fun toggleFavoriteFolder(item: BrowseItem) {
+        val store = favoriteStore ?: return
+        val source = _ui.value.activeSourceId
+        val page = item.id
+        if (source.isBlank() || page.isBlank()) return
+        if (_ui.value.folderFavoriteRunning) return
+
+        val alreadySaved = store.byFolder(source, page).isNotEmpty()
+        if (alreadySaved) {
+            val removed = store.removeByFolder(source, page)
+            _ui.value = _ui.value.copy(
+                favorites = store.all(),
+                message = "已取消收藏「${item.title}」的 $removed 个频道"
+            )
+            return
+        }
+
+        _ui.value = _ui.value.copy(folderFavoriteRunning = true)
+        guarded.launch {
+            val sections = runCatching { MusicRepository.browse(source, page) }
+                .getOrNull()?.sections.orEmpty()
+            // region:<code> → first section only (the region's own stations);
+            // skip the trailing national section. cat:<id> → every section.
+            val wanted = if (page.startsWith("region:")) sections.take(1) else sections
+            val stations = wanted.flatMap { it.items }
+                .filter { it.kind == BrowseItem.Kind.STATION && it.id.isNotBlank() }
+            // Defensive dedupe within the chosen sections.
+            val unique = LinkedHashMap<String, BrowseItem>()
+            stations.forEach { unique.putIfAbsent(it.id, it) }
+            val rows = unique.values.map { it.toFavorite(source).copy(folder = page) }
+            // Migrate an older build's saved-folder row: the channels replace it.
+            store.removeLinkRow(source, page)
+            val added = store.addIfAbsent(rows)
+            _ui.value = _ui.value.copy(
+                favorites = store.all(),
+                folderFavoriteRunning = false,
+                message = if (added > 0) "已收藏「${item.title}」内的 $added 个频道"
+                          else "「${item.title}」里的频道都已收藏"
+            )
+        }
+    }
+
     /** The player bar's heart: favourites whatever is actually playing. */
     fun toggleCurrentFavorite() {
         val item = _ui.value.currentPlayable ?: run {
@@ -565,7 +657,11 @@ class MainViewModel : ViewModel() {
 
     fun navigate(page: Page) {
         // 最大化只属于播放界面（首页）；切走时还原为 16:9。
-        _ui.value = _ui.value.copy(page = page, maximized = if (page == Page.HOME) _ui.value.maximized else false)
+        _ui.value = _ui.value.copy(
+            page = page,
+            maximized = if (page == Page.HOME) _ui.value.maximized else false,
+            browseBackStack = emptyList()
+        )
         guarded.launch {
             when (page) {
                 Page.LIBRARY -> _ui.value = _ui.value.copy(browse = MusicRepository.localTracks())
@@ -575,6 +671,26 @@ class MainViewModel : ViewModel() {
                 else -> Unit
             }
         }
+    }
+
+    /**
+     * BACK from a detail/folder page: pop one snapshot and restore it. Nested
+     * folders push one entry each, so this steps back one level at a time until
+     * the stack is empty, which means the original category home.
+     */
+    fun navigateBack() {
+        val stack = _ui.value.browseBackStack
+        if (stack.isEmpty()) {
+            navigate(Page.HOME)
+            return
+        }
+        val prev = stack.last()
+        _ui.value = _ui.value.copy(
+            page = prev.page,
+            browse = prev.browse,
+            activeNav = prev.activeNav,
+            browseBackStack = stack.dropLast(1)
+        )
     }
 
     // ---------------------------------------------------------------- browsing
@@ -593,7 +709,12 @@ class MainViewModel : ViewModel() {
             runCatching { MusicRepository.browse(id, pageId) }
                 .onSuccess { browse ->
                     if (id != _ui.value.activeSourceId) return@onSuccess
-                    _ui.value = _ui.value.copy(browse = browse, page = Page.BROWSE)
+                    val cur = _ui.value
+                    _ui.value = cur.copy(
+                        browse = browse,
+                        page = Page.BROWSE,
+                        browseBackStack = cur.browseBackStack + BrowseBackEntry(cur.page, cur.browse, cur.activeNav)
+                    )
                 }
                 .onFailure { e -> _ui.value = _ui.value.copy(message = "打开页面失败：${e.message ?: "未知错误"}") }
         }
@@ -614,7 +735,12 @@ class MainViewModel : ViewModel() {
             runCatching { MusicRepository.detail(source, kind, id, offset) }
                 .onSuccess { browse ->
                     if (source != _ui.value.activeSourceId) return@onSuccess
-                    _ui.value = _ui.value.copy(browse = browse, page = Page.BROWSE)
+                    val cur = _ui.value
+                    _ui.value = cur.copy(
+                        browse = browse,
+                        page = Page.BROWSE,
+                        browseBackStack = cur.browseBackStack + BrowseBackEntry(cur.page, cur.browse, cur.activeNav)
+                    )
                 }
                 .onFailure { e ->
                     _ui.value = _ui.value.copy(message = "打开详情失败：${e.message ?: "未知错误"}")
@@ -711,6 +837,184 @@ class MainViewModel : ViewModel() {
         playTrack(tracks.first(), tracks)
     }
 
+    /**
+     * 收藏 → 全部播放. Expands every saved row of the current source into a
+     * static queue, then starts from the first. Favourites are per-source, so
+     * a radio source yields only stations and a music source only songs — no
+     * mixed queue and no grouping logic needed.
+     *
+     *  - TRACK rows carry their full Track payload: straight into the queue.
+     *  - STATION rows become a Track whose id is the saved "live:<id>" /
+     *    "xm:<id>"; cnradio's stream() resolves that id to a fresh live URL on
+     *    every open, and PlayQueueJSON clears queueStationID so next()/prev()
+     *    walk the queue by index — i.e. jump between the saved stations.
+     *  - PLAYLIST / SHOW / ALBUM / ARTIST rows are expanded via detail() (first
+     *    page, same depth a tap reaches).
+     *  - LINK rows are skipped: they are page jumps, not playable.
+     *
+     * Runs on [guarded] so slow detail() calls never block the UI; the
+     * [UiState.favoritePlayAllRunning] flag stops a second tap mid-expand.
+     */
+    fun playFavoriteAll() {
+        if (_ui.value.favoritePlayAllRunning) return
+        val source = _ui.value.activeSourceId
+        if (source.isBlank()) return
+        val rows = favoriteStore?.bySource(source).orEmpty()
+        if (rows.isEmpty()) {
+            _ui.value = _ui.value.copy(message = "收藏夹还是空的，先收藏一些内容吧")
+            return
+        }
+        _ui.value = _ui.value.copy(favoritePlayAllRunning = true, message = "正在展开收藏…")
+        guarded.launch {
+            // LinkedHashMap keeps the favourites' newest-first order and drops
+            // duplicates by track id (stations expanded more than once, etc.).
+            val tracks = LinkedHashMap<String, Track>()
+            var skipped = 0
+            for (row in rows) {
+                when (row.kind) {
+                    BrowseItem.Kind.TRACK.name -> {
+                        row.toBrowseItem().track?.let { t ->
+                            if (t.id.isNotBlank()) tracks.putIfAbsent(t.id, t)
+                        } ?: skipped++
+                    }
+                    BrowseItem.Kind.STATION.name -> {
+                        // A saved station id is already the public id stream()
+                        // understands. Wrapping it as a Track makes it a normal
+                        // queue row; no queueStationID means next/prev just
+                        // move to the next saved station.
+                        val t = Track(
+                            id = row.itemId,
+                            name = row.title.ifBlank { row.itemId },
+                            imageUrl = row.imageUrl,
+                            source = source
+                        )
+                        tracks.putIfAbsent(t.id, t)
+                    }
+                    "PLAYLIST", "SHOW", "ALBUM", "ARTIST" -> {
+                        val detail = runCatching {
+                            MusicRepository.detail(source, row.kind.lowercase(), row.itemId, 0)
+                        }.getOrNull()
+                        val found = detail?.sections?.flatMap { it.items }.orEmpty().mapNotNull { it.track }
+                        if (found.isEmpty()) {
+                            skipped++
+                        } else {
+                            found.forEach { t -> if (t.id.isNotBlank()) tracks.putIfAbsent(t.id, t) }
+                        }
+                    }
+                    else -> skipped++ // LINK and unknown kinds are page jumps
+                }
+            }
+            val list = tracks.values.toList()
+            if (list.isEmpty()) {
+                _ui.value = _ui.value.copy(
+                    favoritePlayAllRunning = false,
+                    message = "收藏里没有可直接播放的内容"
+                )
+                return@launch
+            }
+            // Build the queue here rather than calling playAll(): playAll fires
+            // its own coroutine whose "正在播放" toast would race with the
+            // summary below. PlayQueueJSON clears queueStationID, which is what
+            // makes next/prev walk these rows instead of refreshing one station.
+            val first = list.first()
+            _ui.value = _ui.value.copy(currentPlayable = first.toFavorite(source))
+            runCatching { MusicRepository.play(source, list, 0) }
+                .onSuccess {
+                    val suffix = if (skipped > 0) "，跳过 $skipped 项" else ""
+                    _ui.value = _ui.value.copy(
+                        player = MusicRepository.queue(),
+                        favoritePlayAllRunning = false,
+                        message = "已添加 ${list.size} 项到播放队列$suffix"
+                    )
+                }
+                .onFailure { e ->
+                    _ui.value = _ui.value.copy(
+                        favoritePlayAllRunning = false,
+                        message = "播放收藏失败：${e.message ?: "未知错误"}"
+                    )
+                }
+        }
+    }
+
+    /**
+     * The card ▶ the desktop build puts on album covers. Replaces the queue
+     * with everything behind one tile, so a 喜马拉雅 专辑 card starts all of its
+     * episodes instead of only opening the detail page.
+     *
+     * Shares [playFavoriteAll]'s replacement semantics: rows go through
+     * [MusicRepository.play], which clears the live-station window so next/prev
+     * walk this static queue. [UiState.browseItemPlayAllRunning] blocks a
+     * second tap while a detail page is being expanded.
+     */
+    fun playBrowseItemAll(item: BrowseItem) {
+        if (_ui.value.browseItemPlayAllRunning) return
+        val source = _ui.value.activeSourceId
+        if (source.isBlank()) return
+        // LINK rows are page jumps; a blank id has no detail to expand.
+        if (item.id.isBlank() || item.kind == BrowseItem.Kind.LINK) {
+            _ui.value = _ui.value.copy(message = "这个卡片没有可直接播放的内容")
+            return
+        }
+        _ui.value = _ui.value.copy(
+            browseItemPlayAllRunning = true,
+            message = "正在展开「${item.title}」…"
+        )
+        guarded.launch {
+            val tracks = LinkedHashMap<String, Track>()
+            when (item.kind) {
+                BrowseItem.Kind.TRACK -> {
+                    item.track?.takeIf { it.id.isNotBlank() }?.let { tracks.putIfAbsent(it.id, it) }
+                }
+                BrowseItem.Kind.STATION -> {
+                    // cnradio's stream() resolves this id to a fresh live URL
+                    // on every open; wrapping it keeps next/prev on the queue.
+                    val t = Track(
+                        id = item.id,
+                        name = item.title.ifBlank { item.id },
+                        imageUrl = item.imageUrl,
+                        source = source
+                    )
+                    tracks.putIfAbsent(t.id, t)
+                }
+                else -> {
+                    // PLAYLIST / SHOW / ALBUM / ARTIST: one detail() call, the
+                    // same depth a normal card tap reaches. A plugin that
+                    // cannot expand simply yields no rows and gets a toast.
+                    val detail = runCatching {
+                        MusicRepository.detail(source, item.kind.name.lowercase(), item.id, 0)
+                    }.getOrNull()
+                    detail?.sections?.flatMap { it.items }.orEmpty()
+                        .mapNotNull { it.track }
+                        .forEach { t -> if (t.id.isNotBlank()) tracks.putIfAbsent(t.id, t) }
+                }
+            }
+            val list = tracks.values.toList()
+            if (list.isEmpty()) {
+                _ui.value = _ui.value.copy(
+                    browseItemPlayAllRunning = false,
+                    message = "「${item.title}」里没有可直接播放的内容"
+                )
+                return@launch
+            }
+            val first = list.first()
+            _ui.value = _ui.value.copy(currentPlayable = first.toFavorite(source))
+            runCatching { MusicRepository.play(source, list, 0) }
+                .onSuccess {
+                    _ui.value = _ui.value.copy(
+                        player = MusicRepository.queue(),
+                        browseItemPlayAllRunning = false,
+                        message = "已播放「${item.title}」· 共 ${list.size} 项"
+                    )
+                }
+                .onFailure { e ->
+                    _ui.value = _ui.value.copy(
+                        browseItemPlayAllRunning = false,
+                        message = "播放失败：${e.message ?: "未知错误"}"
+                    )
+                }
+        }
+    }
+
     fun togglePlay() = guarded.launch {
         MusicRepository.togglePlay()
         _ui.value = _ui.value.copy(player = MusicRepository.queue())
@@ -746,8 +1050,6 @@ class MainViewModel : ViewModel() {
     }
 
     fun closePlayer() { _ui.value = _ui.value.copy(playerOpen = false) }
-
-    fun setFocusMode(on: Boolean) { _ui.value = _ui.value.copy(focusMode = on) }
 
     /** 播放界面的 16:9 ↔ 32:9 最大化切换；仅首页可用。 */
     fun toggleMaximized() {
@@ -820,7 +1122,13 @@ class MainViewModel : ViewModel() {
 
     fun setQuality(q: String) = guarded.launch {
         MusicRepository.setAppSettings(quality = q)
-        _ui.value = _ui.value.copy(settings = _ui.value.settings.copy(quality = q), message = "音质设为 $q")
+        val label = when (q) {
+            "low" -> "标准"
+            "high" -> "高品质"
+            "lossless" -> "无损"
+            else -> q
+        }
+        _ui.value = _ui.value.copy(settings = _ui.value.settings.copy(quality = q), message = "音质设为 $label")
     }
 
     fun dismissMessage() { _ui.value = _ui.value.copy(message = "") }
@@ -877,6 +1185,65 @@ class MainViewModel : ViewModel() {
                 else -> "检查完成：${updates.count { it.available }} 个可更新"
             }
         )
+    }
+
+    /** Check the fork's GitHub release for a newer car APK. */
+    fun checkAppUpdate() = guarded.launch {
+        if (_ui.value.appUpdateChecking) return@launch
+        _ui.value = _ui.value.copy(appUpdateChecking = true)
+        val result = AppUpdater.check(BuildVersion.ForkRepo)
+        val release = result.getOrNull()
+        val failure = result.exceptionOrNull()
+        _ui.value = _ui.value.copy(
+            appUpdateChecking = false,
+            appUpdate = when {
+                release != null && release.apkUrl.isNotBlank() &&
+                    AppUpdater.isNewer(release.version, BuildVersion.Name) -> AppUpdateInfo(
+                    version = release.version,
+                    notes = release.notes,
+                    downloadUrl = release.apkUrl,
+                    pageUrl = release.pageUrl,
+                    assetName = release.apkName
+                )
+                else -> null
+            },
+            message = when {
+                failure != null -> "检查更新失败：${failure.message ?: "网络错误"}"
+                release == null -> "更新源尚未发布版本"
+                release.apkUrl.isBlank() -> "发现新版本 ${release.version}，但未附带 APK"
+                !AppUpdater.isNewer(release.version, BuildVersion.Name) ->
+                    "已是最新版本（${BuildVersion.Name}）"
+                else -> ""
+            }
+        )
+    }
+
+    fun dismissAppUpdate() {
+        _ui.value = _ui.value.copy(appUpdate = null)
+    }
+
+    /** Download the selected APK and hand it to the system installer. */
+    fun downloadAndInstallAppUpdate() = guarded.launch {
+        val info = _ui.value.appUpdate ?: return@launch
+        val context = appContext ?: run {
+            _ui.value = _ui.value.copy(message = "无法安装：缺少应用上下文")
+            return@launch
+        }
+        _ui.value = _ui.value.copy(
+            appUpdate = null,
+            appUpdateDownloading = true,
+            message = "正在下载 ${info.version}…"
+        )
+        val result = runCatching { AppUpdater.download(context, info.downloadUrl) }
+        val file = result.getOrNull()
+        val failure = result.exceptionOrNull()
+        val message = when {
+            failure != null -> "下载失败：${failure.message ?: "网络错误"}"
+            file == null -> "下载失败"
+            !AppUpdater.install(context, file) -> "请先允许安装未知来源应用，然后重试"
+            else -> "正在安装 ${info.version}"
+        }
+        _ui.value = _ui.value.copy(appUpdateDownloading = false, message = message)
     }
 
     fun openPluginSettings(id: String) = guarded.launch {

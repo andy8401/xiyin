@@ -58,7 +58,11 @@ data class FavoriteItem(
     val title: String,
     val subtitle: String = "",
     val imageUrl: String = "",
-    val payload: String = ""
+    val payload: String = "",
+    /** Page id of the folder whose expansion added this row; "" when the row
+     *  was favourited directly. Lets a folder's heart reflect/unfavourite the
+     *  channels it contributed without storing the folder itself as a row. */
+    val folder: String = ""
 ) {
     /** Stable identity: one copy of a given item per source. */
     val key: String get() = "$sourceId|$kind|$itemId"
@@ -82,6 +86,7 @@ data class FavoriteItem(
         .put("subtitle", subtitle)
         .put("imageUrl", imageUrl)
         .put("payload", payload)
+        .put("folder", folder)
 
     companion object {
         fun fromJson(o: JSONObject?): FavoriteItem? {
@@ -97,7 +102,8 @@ data class FavoriteItem(
                 title = o.optString("title", ""),
                 subtitle = o.optString("subtitle", ""),
                 imageUrl = o.optString("imageUrl", ""),
-                payload = o.optString("payload", "")
+                payload = o.optString("payload", ""),
+                folder = o.optString("folder", "")
             )
         }
     }

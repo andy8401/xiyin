@@ -31,11 +31,12 @@ object GoBridge {
             val dataDir = app.filesDir.absolutePath
             val pluginDir = File(dataDir, "plugins")
 
-            // Unpack the bundled plugins on first boot: 云听 (cnradio) and
-            // 喜马拉雅 (ximalaya-web). demo is deliberately not bundled. The
-            // local source is synthesized by the ViewModel, not a plugin.
-            // Only a fresh install is seeded; an existing dataDir/plugins is
-            // left untouched so user-installed plugins survive upgrades.
+            // Unpack the bundled plugins before Facade.init(): 收音机 (cnradio,
+            // v1.3.0) and 喜马拉雅 (ximalaya-web). demo is deliberately not
+            // bundled. The local source is synthesized by the ViewModel, not
+            // a plugin. Asset files are rewritten on every boot so a bundled
+            // plugin upgrade reaches existing installs; unrelated plugin
+            // directories installed by the user are left untouched.
             installBundledPlugins(app.assets, pluginDir)
 
             Facade.setHostBridge(BridgeHost(app))

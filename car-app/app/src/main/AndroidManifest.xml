@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- App self-update: the sideloaded head-unit build installs its own APK. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".MyGoCarApp"
@@ -44,6 +46,18 @@
             android:label="@string/sign_in"
             android:theme="@style/Theme.MyGoCar"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- Exposes the downloaded APK to the system installer. The authority
+             is unique to this app; only files under filesDir/updates are shared. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".player.PlaybackService"

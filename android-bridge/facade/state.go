@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"mygo-music/internal/i18n"
 )
 
 // AppSettings is the car-unit subset of the desktop app's settings. It is a
@@ -24,6 +26,14 @@ type AppSettings struct {
 	// Lyrics shows the lyrics pane in the now-playing screen. Default on: a
 	// source without lyrics answers with its own "no lyrics" text.
 	Lyrics bool `json:"lyrics"`
+}
+
+// syncLanguage speaks the setting in the i18n package the plugin host reads.
+// "system" has no OS locale to resolve against on Android, so it falls back to
+// Chinese for this zh-CN car product.
+func syncLanguage(setting string) {
+	preferred := []string{i18n.Chinese}
+	i18n.SetLanguage(i18n.Resolve(setting, preferred))
 }
 
 func defaultAppSettings() AppSettings {
@@ -89,6 +99,13 @@ func InitState(dataDir string) error {
 	if b, err := os.ReadFile(settingsPath()); err == nil {
 		_ = json.Unmarshal(b, &st.settings)
 	}
+	// The desktop app calls i18n.SetLanguage in app.go once settings load. The
+	// Android bridge has no app.go, so the language atom stayed at its default
+	// English: plugin host.t("Cloud Radio") then missed locales/zh-CN.json and
+	// the head unit showed English even in a Chinese car. Speak the saved
+	// language before plugins are discovered. "system" resolves to Chinese here
+	// — the car product is zh-CN and the bridge has no OS locale to ask.
+	syncLanguage(st.settings.Language)
 	st.hasSess = false
 	if b, err := os.ReadFile(sessionPath()); err == nil {
 		if json.Unmarshal(b, &st.session) == nil {
@@ -134,6 +151,10 @@ func SetSettingsJSON(patch string) error {
 		return err
 	}
 	st.settings = merged
+	// Keep host.t in step with a language change at runtime, as the desktop
+	// app's setLanguage does. Otherwise a plugin's locales stay in the old
+	// language until the bridge restarts.
+	syncLanguage(merged.Language)
 	notify(map[string]any{"event": "settings", "value": merged})
 	return nil
 }

@@ -162,10 +162,13 @@ func nextLocked() error {
 	if err := json.Unmarshal([]byte(b.queueJSON), &tracks); err != nil {
 		return err
 	}
-	if b.queueAt+1 >= len(tracks) {
-		return fmt.Errorf("already at last track")
+	if len(tracks) == 0 {
+		return fmt.Errorf("empty queue")
 	}
-	b.queueAt++
+	// Queue is circular: advancing past the last row wraps to the first.
+	// nextLocked is also used by Ended(), so a played-through queue loops
+	// back to the start instead of stopping on the final track.
+	b.queueAt = (b.queueAt + 1) % len(tracks)
 	return openCurrent(p)
 }
 
@@ -198,7 +201,7 @@ func PlayAt(index int) error {
 	return openCurrent(p)
 }
 
-// Prev goes back one track.
+// Prev goes back one track, wrapping to the last row from the first.
 func Prev() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -206,10 +209,18 @@ func Prev() error {
 	if err != nil {
 		return fmt.Errorf("no active queue: %w", err)
 	}
-	if b.queueAt == 0 {
-		return fmt.Errorf("already at first track")
+	var tracks []music.Track
+	if err := json.Unmarshal([]byte(b.queueJSON), &tracks); err != nil {
+		return err
 	}
-	b.queueAt--
+	if len(tracks) == 0 {
+		return fmt.Errorf("empty queue")
+	}
+	// A live station's queue is a rolling window with no meaningful "previous".
+	if b.queueStationID != "" {
+		return fmt.Errorf("a live station only plays its current segment")
+	}
+	b.queueAt = (b.queueAt - 1 + len(tracks)) % len(tracks)
 	return openCurrent(p)
 }
 

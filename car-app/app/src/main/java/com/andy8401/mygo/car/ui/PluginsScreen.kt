@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,8 +23,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,6 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.andy8401.mygo.car.data.Account
 import com.andy8401.mygo.car.data.PluginSetting
 import com.andy8401.mygo.car.ui.CarColors.Background
@@ -62,6 +68,9 @@ import com.andy8401.mygo.car.ui.CarColors.TextMuted
  */
 @Composable
 fun PluginManagerContent(ui: MainViewModel.UiState, vm: MainViewModel, modifier: Modifier) {
+    // Same behaviour as the support page: hardware BACK and the visible arrow
+    // both return to Settings, where this screen was opened from.
+    androidx.activity.compose.BackHandler { vm.navigate(MainViewModel.Page.SETTINGS) }
     val context = LocalContext.current
     var repo by remember { mutableStateOf("") }
 
@@ -77,7 +86,19 @@ fun PluginManagerContent(ui: MainViewModel.UiState, vm: MainViewModel, modifier:
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("插件管理", style = MaterialTheme.typography.headlineLarge, color = Text)
+                IconButton(onClick = { vm.navigate(MainViewModel.Page.SETTINGS) }) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        tint = Cyan,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                Text(
+                    "插件管理",
+                    style = MaterialTheme.typography.headlineLarge.copy(fontSize = 30.sp),
+                    color = Text
+                )
                 Spacer(Modifier.weight(1f))
                 Text(
                     if (ui.updatesRunning) "检查中…" else "检查更新",

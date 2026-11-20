@@ -27,9 +27,11 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -102,27 +104,42 @@ private fun rememberPlaybackPosition(trackId: String): Long {
 
 @Composable
 private fun PaneSwitch(ui: MainViewModel.UiState, vm: MainViewModel) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("MUSE", color = Gold, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.width(24.dp))
-        if (ui.settings.lyrics) {
-            PaneTab("歌词", ui.playerPane == MainViewModel.PlayerPane.LYRICS) {
-                vm.setPlayerPane(MainViewModel.PlayerPane.LYRICS)
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.align(Alignment.CenterStart)
+        ) {
+            // Same voiceprint mark as the launcher and left rail, tinted to the
+            // player's gold accent instead of the old MUSE wordmark.
+            VoiceprintMark(size = 36.dp, color = Gold)
+            Spacer(Modifier.width(24.dp))
+            if (ui.settings.lyrics) {
+                PaneTab("歌词", ui.playerPane == MainViewModel.PlayerPane.LYRICS) {
+                    vm.setPlayerPane(MainViewModel.PlayerPane.LYRICS)
+                }
+                Spacer(Modifier.width(8.dp))
             }
-            Spacer(Modifier.width(8.dp))
+            PaneTab("播放清单 ${ui.player.length}", ui.playerPane == MainViewModel.PlayerPane.QUEUE) {
+                vm.setPlayerPane(MainViewModel.PlayerPane.QUEUE)
+            }
         }
-        PaneTab("播放清单 ${ui.player.length}", ui.playerPane == MainViewModel.PlayerPane.QUEUE) {
-            vm.setPlayerPane(MainViewModel.PlayerPane.QUEUE)
+        // Down arrow is the only close affordance; the old 专注 entry and the
+        // whole driving-focus mode were removed from the player header.
+        // It is anchored to the horizontal centre of the whole player header
+        // rather than being pushed to the far right by a weight spacer.
+        Box(
+            Modifier.align(Alignment.Center).size(72.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            IconButton(onClick = { vm.closePlayer() }, modifier = Modifier.size(64.dp)) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "收起播放界面",
+                    tint = Gold,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
-        Text(
-            "专注", color = Gold, style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.clickable { vm.setFocusMode(true) }.padding(horizontal = 12.dp, vertical = 10.dp)
-        )
-        Text(
-            "收起", color = Gold, style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.clickable { vm.closePlayer() }.padding(horizontal = 12.dp, vertical = 10.dp)
-        )
     }
 }
 
@@ -437,55 +454,6 @@ private fun QueueRow(track: Track, index: Int, current: Boolean, jumpable: Boole
             }
         }
         Text(fmtTime(track.durationMs), color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-// ------------------------------------------------------------ driving focus
-
-/**
- * MUSE 驾驶专注模式: near-black, one title, one play button, one gold bar.
- * Deliberately drops the queue, tabs and volume so a glance costs nothing.
- */
-@Composable
-fun FocusModeScreen(ui: MainViewModel.UiState, vm: MainViewModel) {
-    BackHandler { vm.setFocusMode(false) }
-    val player = ui.player
-    val position = rememberPlaybackPosition(player.currentTrack?.id ?: "")
-    Column(
-        Modifier.fillMaxSize().background(Ink).statusBarsPadding()
-            .padding(horizontal = 40.dp, vertical = 16.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("● 驾驶专注模式", color = Gold, style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.background(SurfaceHigh, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp))
-            Spacer(Modifier.weight(1f))
-            Text("退出专注", color = TextMuted, style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.clickable { vm.setFocusMode(false) }
-                    .background(Background, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp))
-        }
-        Column(
-            Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(player.currentTrack?.name ?: "未播放",
-                style = MaterialTheme.typography.headlineLarge, color = Paper)
-            Spacer(Modifier.height(4.dp))
-            Text(player.currentTrack?.artistText ?: "选择一首歌开始",
-                style = MaterialTheme.typography.bodyLarge, color = TextMuted)
-            Spacer(Modifier.height(72.dp))
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center) {
-                TransportIcon(Icons.Filled.SkipPrevious, "上一首", 56.dp) { vm.prev() }
-                Spacer(Modifier.width(56.dp))
-                PlayButton(player.playing, 112.dp) { vm.togglePlay() }
-                Spacer(Modifier.width(56.dp))
-                TransportIcon(Icons.Filled.SkipNext, "下一首", 56.dp) { vm.next() }
-            }
-        }
-        Progress(player, position) { vm.seekTo(it) }
     }
 }
 

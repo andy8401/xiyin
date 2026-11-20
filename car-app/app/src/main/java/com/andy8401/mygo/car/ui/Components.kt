@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,10 +19,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,11 +41,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.andy8401.mygo.car.data.BrowseItem
 import com.andy8401.mygo.car.data.Track
+import com.andy8401.mygo.car.ui.CarColors.Background
 import com.andy8401.mygo.car.ui.CarColors.Cyan
 import com.andy8401.mygo.car.ui.CarColors.SurfaceHigh
 import com.andy8401.mygo.car.ui.CarColors.Text
@@ -197,10 +202,11 @@ fun CoverImageFill(label: String, modifier: Modifier = Modifier, imageUrl: Strin
 @Composable
 fun SectionHeader(title: String, action: String? = null, onAction: () -> Unit = {}) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(title, style = MaterialTheme.typography.titleLarge, color = Text)
+        Text(title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp), color = Text)
         Spacer(Modifier.weight(1f))
         if (action != null) {
-            Text(action, color = Cyan, modifier = Modifier.clickable { onAction() }.padding(8.dp))
+            Text(action, color = Cyan, fontSize = 20.sp,
+                modifier = Modifier.clickable { onAction() }.padding(8.dp))
         }
     }
 }
@@ -215,14 +221,14 @@ fun TrackRow(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().height(64.dp).clickable { onClick() }.padding(horizontal = 4.dp)
+        modifier = Modifier.fillMaxWidth().height(80.dp).clickable { onClick() }.padding(horizontal = 4.dp)
     ) {
-        CoverImage(track.name, 48, imageUrl = track.imageUrl)
+        CoverImage(track.name, 60, imageUrl = track.imageUrl)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(track.name, style = MaterialTheme.typography.bodyLarge,
+            Text(track.name, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp),
                 color = if (playing) Cyan else Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(track.artistText, style = MaterialTheme.typography.bodyMedium,
+            Text(track.artistText, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 17.sp),
                 color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (onFavorite != null) {
@@ -234,12 +240,39 @@ fun TrackRow(
 /** Heart toggle shared by rows and tiles. Filled + gold when saved, outline otherwise. */
 @Composable
 private fun FavoriteButton(favorite: Boolean, label: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Icon(
             imageVector = if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
             contentDescription = label,
             tint = if (favorite) Cyan else TextMuted,
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(26.dp)
+        )
+    }
+}
+
+/**
+ * Circular "play everything behind this card" affordance, pinned to the
+ * artwork's lower-right corner — the same place the desktop build puts it.
+ *
+ * It is always a SIBLING of the card's own clickable (never a child), so the
+ * pointer is consumed by the badge and a tap cannot fall through into the
+ * detail page. Cyan on a solid disc keeps it visible over any station logo.
+ */
+@Composable
+private fun PlayBadge(modifier: Modifier = Modifier, label: String, onClick: () -> Unit) {
+    Box(
+        modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Cyan)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Filled.PlayArrow,
+            contentDescription = label,
+            tint = Background,
+            modifier = Modifier.size(30.dp)
         )
     }
 }
@@ -257,22 +290,32 @@ fun TileItem(
     item: BrowseItem,
     onClick: () -> Unit,
     favorite: Boolean = false,
-    onFavorite: (() -> Unit)? = null
+    onFavorite: (() -> Unit)? = null,
+    /** Non-null when this tile can be expanded into a play queue. */
+    onPlay: (() -> Unit)? = null
 ) {
     Box {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.width(120.dp).height(TileHeight).clickable { onClick() }.padding(4.dp)
         ) {
-            // size() is only a preference: a cramped parent shrinks the cover and
-            // squashes the caption to a few pixels. Claim the height explicitly.
-            CoverImage(item.title, TileCover, Modifier.height(TileCover.dp), imageUrl = item.imageUrl)
+            // Wrap the cover so ▶ pins to the artwork, not to the caption
+            // that sits below it. size() inside CoverImage still claims 88dp.
+            Box(Modifier.height(TileCover.dp)) {
+                CoverImage(item.title, TileCover, imageUrl = item.imageUrl)
+                if (onPlay != null) {
+                    PlayBadge(
+                        Modifier.align(Alignment.BottomEnd).padding(end = 2.dp, bottom = 2.dp),
+                        "播放全部 ${item.title}", onPlay
+                    )
+                }
+            }
             Spacer(Modifier.height(6.dp))
-            Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.title, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 19.sp),
+                color = Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (item.subtitle.isNotBlank()) {
-                Text(item.subtitle, style = MaterialTheme.typography.bodySmall, color = TextMuted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(item.subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 15.sp),
+                    color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         if (onFavorite != null) {
@@ -284,30 +327,84 @@ fun TileItem(
 }
 
 /**
- * Library card: the redesign uses a 4-across grid of landscape artwork with
- * the caption underneath. Unlike TileItem it lives in a non-scrolling Row and
- * shares the width, so it cannot be given a fixed dp size.
+ * Radio / library folder card.
+ *
+ * The head-unit review asked for native-radio-style cards: the caption lives
+ * INSIDE the artwork, centred and large, with a scrim so white text stays
+ * readable over any station logo. The caption used to sit below the picture
+ * and was too small to read from the driver's seat.
  */
 @Composable
 fun RowScope.LibraryTile(
     item: BrowseItem,
     onClick: () -> Unit,
     favorite: Boolean = false,
-    onFavorite: (() -> Unit)? = null
+    onFavorite: (() -> Unit)? = null,
+    /** Non-null when this card can be expanded into a play queue. */
+    onPlay: (() -> Unit)? = null
 ) {
-    Box(Modifier.weight(1f)) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp).clickable { onClick() }
+    Box(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 6.dp)) {
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().aspectRatio(1.9f)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { onClick() }
         ) {
-            // 1.7 keeps the caption above the player bar on a 411dp-tall window;
-            // the spec's taller artwork only fits when the bar is hidden.
-            ArtworkImage(item.imageUrl, item.title, Modifier.fillMaxWidth().aspectRatio(1.9f))
-            Spacer(Modifier.height(8.dp))
-            Text(item.title, style = MaterialTheme.typography.bodyMedium, color = Text,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Card width scales with the panel, so derive the type from it:
+            // ~10% of the card width, clamped to a readable car-sized range.
+            val titleSize = (maxWidth.value * 0.105f).coerceIn(18f, 36f)
+            val subSize = (titleSize * 0.55f).coerceIn(13f, 20f)
+            ArtworkImage(item.imageUrl, item.title, Modifier.fillMaxSize())
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        listOf(Color(0x66000000), Color(0xAA000000), Color(0xCC000000))
+                    )
+                )
+            )
+            Column(
+                // Reserve the top-right corner for the heart so long station
+                // names never collide with it.
+                Modifier.fillMaxSize().padding(start = 12.dp, end = 52.dp, top = 8.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    item.title,
+                    color = Color.White,
+                    fontSize = titleSize.sp,
+                    lineHeight = (titleSize * 1.15f).sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (item.subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        item.subtitle,
+                        color = Color.White.copy(alpha = 0.82f),
+                        fontSize = subSize.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
+        // ▶ mirrors the desktop rank/album cards: lower-right of the artwork.
+        // It is a sibling of the card's clickable, so a tap here is consumed
+        // by the badge and never opens the detail page.
+        if (onPlay != null) {
+            Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomEnd) {
+                PlayBadge(
+                    Modifier.padding(end = 8.dp, bottom = 8.dp),
+                    "播放全部 ${item.title}", onPlay
+                )
+            }
+        }
+        // Heart stays above the scrim and above the centred caption.
         if (onFavorite != null) {
-            Box(Modifier.matchParentSize().padding(end = 2.dp), contentAlignment = Alignment.TopEnd) {
+            Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
                 FavoriteButton(favorite, "收藏 ${item.title}", onFavorite)
             }
         }

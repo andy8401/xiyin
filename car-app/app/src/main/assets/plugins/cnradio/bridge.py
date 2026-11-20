@@ -29,19 +29,19 @@ USER_AGENT = "Mozilla/5.0 (compatible; MyGoMusic/1.0)"
 HEALTH = b"cnradio-bridge-ok"
 
 
-def http_get(url, timeout=12):
+def http_get(url, timeout=12, referer=REFERER, user_agent=USER_AGENT):
     req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Referer": REFERER,
+        "User-Agent": user_agent,
+        "Referer": referer,
         "Accept": "*/*",
     })
     with urllib.request.urlopen(req, timeout=timeout) as res:
         return res.read()
 
 
-def read_playlist(url):
+def read_playlist(url, referer=REFERER, user_agent=USER_AGENT):
     """Return (media_sequence, [absolute segment urls], target_duration)."""
-    text = http_get(url, 10).decode("utf-8", "ignore")
+    text = http_get(url, 10, referer=referer, user_agent=user_agent).decode("utf-8", "ignore")
     sequence, segments, target = 0, [], 10.0
     for raw in text.splitlines():
         line = raw.strip()
@@ -73,21 +73,25 @@ class Demuxer:
     def __init__(self):
         self.carry = bytearray()
 
-    def feed(self, ts):
-        payload = bytearray()
-        pos, size = 0, len(ts)
-        while pos + 188 <= size:
-            if ts[pos] != 0x47:
-                pos += 1
-                continue
-            packet = ts[pos:pos + 188]
-            pos += 188
-            adaptation = (packet[3] >> 4) & 0x03
-            offset = 4
-            if adaptation & 0x02:  # adaptation field present
-                offset = 5 + packet[4]
-            if (adaptation & 0x01) and offset < 188:  # payload present
-                payload += packet[offset:188]
+    def feed(self, ts, strip_ts=True):
+        if strip_ts:
+            payload = bytearray()
+            pos, size = 0, len(ts)
+            while pos + 188 <= size:
+                if ts[pos] != 0x47:
+                    pos += 1
+                    continue
+                packet = ts[pos:pos + 188]
+                pos += 188
+                adaptation = (packet[3] >> 4) & 0x03
+                offset = 4
+                if adaptation & 0x02:  # adaptation field present
+                    offset = 5 + packet[4]
+                if (adaptation & 0x01) and offset < 188:  # payload present
+                    payload += packet[offset:188]
+        else:
+            # 喜马拉雅 aac* segments are already raw ADTS frames; do not strip.
+            payload = bytearray(ts)
 
         data = self.carry + payload
         self.carry = bytearray()
@@ -113,7 +117,10 @@ class Demuxer:
 
 class Handler(http.server.BaseHTTPRequestHandler):
     source_url = ""
-    server_version = "CNRadioBridge/1.0"
+    source_mode = "ts"  # "ts" = strip MPEG-TS; "aac" = raw ADTS segments
+    source_referer = REFERER
+    source_ua = USER_AGENT
+    server_version = "CNRadioBridge/1.1"
 
     def log_message(self, fmt, *args):
         pass  # keep the plugin's stderr quiet
@@ -145,11 +152,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def pump(self):
         demux = Demuxer()
+        strip_ts = (self.source_mode != "aac")
         played = set()
         backoff = 0
         while True:
             try:
-                sequence, segments, target = read_playlist(self.source_url)
+                sequence, segments, target = read_playlist(
+                    self.source_url, referer=self.source_referer,
+                    user_agent=self.source_ua)
                 backoff = 0
             except Exception as exc:
                 backoff = min(backoff + 1, 6)
@@ -163,10 +173,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 fresh = fresh[-1:]
             for number, segment in fresh:
                 try:
-                    raw = http_get(segment, 15)
+                    raw = http_get(segment, 15, referer=self.source_referer,
+                                   user_agent=self.source_ua)
                 except Exception:
                     continue
-                frames = demux.feed(raw)
+                frames = demux.feed(raw, strip_ts=strip_ts)
                 if frames:
                     self.wfile.write(frames)
                     self.wfile.flush()
@@ -183,12 +194,21 @@ class Server(http.server.ThreadingHTTPServer):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cloud Radio HLS to ADTS bridge")
-    parser.add_argument("--url", required=True, help="signed HLS playlist URL")
+    parser = argparse.ArgumentParser(description="Internet radio HLS to ADTS bridge")
+    parser.add_argument("--url", required=True, help="HLS playlist URL")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--mode", choices=["ts", "aac"], default="ts",
+                        help="ts = strip MPEG-TS headers (云听); aac = raw ADTS segments (喜马拉雅)")
+    parser.add_argument("--referer", default=REFERER, help="Referer header for segment requests")
     args = parser.parse_args()
     Handler.source_url = args.url
+    Handler.source_mode = args.mode
+    Handler.source_referer = args.referer
+    if args.mode == "aac":
+        Handler.source_ua = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                             "Mobile/15E148 Safari/604.1")
     server = Server((args.host, args.port), Handler)
     print("bridge: listening on %s:%d" % (args.host, args.port), file=sys.stderr, flush=True)
     try:

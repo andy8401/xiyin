@@ -1,15 +1,19 @@
-// MyGo Music plugin: 云听 (radio.cn) 在线收音机
+// MyGo Music plugin: 云听 (radio.cn) + 喜马拉雅 (ximalaya.com) 在线收音机
 //
-// Web page analysed: https://www.radio.cn/pc-portal/erji/radioStation.html
-// Its data comes from https://ytmsout.radio.cn (declared in /pc-portal/js/api.js).
-// Every GET carries timestamp + sign = UPPER(MD5(sorted_query + "&timestamp=<ms>&key=<fixed>")).
-// host.crypto.md5() is lowercase hex, hence .toUpperCase().
+// Primary source: 云听 radio.cn. Its data comes from https://ytmsout.radio.cn
+// (declared in /pc-portal/js/api.js). Every GET carries timestamp + sign =
+// UPPER(MD5(sorted_query + "&timestamp=<ms>&key=<fixed>")). host.crypto.md5()
+// is lowercase hex, hence .toUpperCase().
 //
-// Two kinds of audio:
-//   * live  -> HLS (m3u8 of MPEG-TS). MyGo Music only decodes raw ADTS AAC,
-//              so bridge.py turns the TS segments into one endless ADTS stream
-//              on 127.0.0.1 and stream() answers that local URL.
-//   * replay-> https://...m4a files, which the player opens directly.
+// Secondary source: 喜马拉雅 https://www.ximalaya.com/radio . Its data comes
+// from https://m.ximalaya.com/radio-first-page-app/{homePage,search} with no
+// signature. Only live stations are merged; replay stays 云听-only. Stations
+// with the same normalised name use the 云听 entry (primary wins).
+//
+// Audio:
+//   * 云听 live   -> HLS of MPEG-TS segments -> bridge.py strips TS headers.
+//   * 喜马拉雅 live -> HLS of raw ADTS .aac segments -> bridge.py --mode aac.
+//   * replay      -> https://...m4a files, which the player opens directly.
 
 const t = host.t;
 const BASE = "https://ytmsout.radio.cn";
@@ -22,6 +26,29 @@ const API = {
   listenback: "/web/appBroadcast/listenbackList",
   programs: "/web/appProgram/listByDate",
 };
+
+// ---- 喜马拉雅 secondary source -------------------------------------------
+const XM_BASE = "https://m.ximalaya.com";
+const XM_LIVE_BASE = "https://live.ximalaya.com";
+const XM_REFERER = "https://m.ximalaya.com/radio/";
+const XM_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
+  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1";
+const XM_PAGE_SIZE = 30;
+const XM_MAX_PAGES = 12; // safety cap; a category never has more than 360 stations
+// 喜马拉雅 categoryId -> 云听 category id. The user wants 云听's category
+// list kept as-is, plus one new "其他" bucket for the leftovers.
+const XM_CAT_MAP = {
+  "5": "9",    // 新闻台 -> 新闻
+  "14": "5",   // 音乐台 -> 音乐
+  "1": "15",   // 交通台 -> 交通
+  "11": "11",  // 经济台 -> 财经
+  "10": "13",  // 生活台 -> 生活
+  "4": "17",   // 文艺台 -> 综艺
+  "8": "17",   // 曲艺台 -> 综艺
+  "13": "17",  // 都市台 -> 综艺
+  // 旅游台(7)/方言台(6)/外语台(3)/综合台(12)/其他台(15)/体育台(2) -> 其他
+};
+const OTHER_CAT = "other";
 const CATALOG_TTL = 30 * 60 * 1000; // station names/covers; never cache stream URLs
 const PAGE_SIZE = 60;
 
@@ -60,6 +87,34 @@ async function api(path, params) {
     throw new Error("云听接口 " + ((body && body.message) || "返回异常"));
   }
   return body;
+}
+
+// -------------------------------------------------------- 喜马拉雅 (secondary)
+// No signature; iPhone UA + Referer is enough (verified against the live site).
+async function xmApi(path, params) {
+  const data = params || {};
+  const url = new URL(/^https?:\/\//.test(path) ? path : XM_BASE + path);
+  Object.keys(data).forEach((k) => url.searchParams.set(k, String(data[k])));
+  const res = await fetch(url.toString(), {
+    headers: { "User-Agent": XM_UA, "Referer": XM_REFERER, "Accept": "application/json" },
+  });
+  if (!res.ok) throw new Error("喜马拉雅接口 HTTP " + res.status);
+  const body = await res.json();
+  if (!body || body.ret !== 0) {
+    throw new Error("喜马拉雅接口 " + ((body && body.msg) || "返回异常"));
+  }
+  return body.data;
+}
+
+// Normalise a station name so the same station on both platforms collides.
+// Strip common broadcast suffixes, punctuation and whitespace.
+function normName(name) {
+  let s = String(name || "");
+  try { s = s.normalize("NFKC"); } catch (err) { /* old engine */ }
+  s = s.toLowerCase();
+  s = s.replace(/(人民广播电台|广播电台|交通广播电台|电视台|广播|电台|频率|频道|之声)/g, "");
+  s = s.replace(/[\s\-—_·（）()【】\[\].,，。!！?？:：'"“”]/g, "");
+  return s;
 }
 
 // -------------------------------------------------------------------- catalog
@@ -101,6 +156,117 @@ async function mapBatched(items, worker) {
   return out;
 }
 
+async function xmRetry(path, params) {
+  let last;
+  for (let i = 0; i <= RETRY_TIMES; i++) {
+    try {
+      return await xmApi(path, params);
+    } catch (err) {
+      last = err;
+      if (i < RETRY_TIMES) await sleep(300 * (i + 1));
+    }
+  }
+  throw last;
+}
+
+// Fetch all 喜马拉雅 live stations and merge into the 云听 catalog structures.
+// 云听 wins whenever the normalised names collide; xm ids are prefixed "xm:".
+// The function mutates byId / catIds / regionIds and returns merge metadata.
+async function mergeXimalaya(previous, byId, catIds, regionIds) {
+  const meta = { count: 0, skipped: 0, failures: [] };
+
+  // Name index of everything 云听 already has (primary source wins).
+  const seen = {};
+  Object.keys(byId).forEach((id) => {
+    const n = normName(byId[id].name);
+    if (n.length >= 2) seen[n] = true;
+  });
+
+  const home = await xmRetry("/radio-first-page-app/homePage", {});
+  const searchModule = (home.modules || []).filter((m) => m.type === "SEARCH")[0] || {};
+  const cats = (searchModule.categories || []).filter((c) => String(c.id) !== "0");
+  const locs = searchModule.locations || [];
+  const catName = {};
+  cats.forEach((c) => { catName[String(c.id)] = c.name; });
+
+  // 1) Full station list by category (each station carries its categoryId).
+  const xmById = {};
+  const catResults = await mapBatched(cats, async (c) => {
+    const list = [];
+    for (let page = 1; page <= XM_MAX_PAGES; page++) {
+      const d = await xmRetry("/radio-first-page-app/search", {
+        locationTypeId: 0, pageNum: page, pageSize: XM_PAGE_SIZE,
+        categoryId: c.id, locationId: 0,
+      });
+      const radios = d.radios || [];
+      radios.forEach((r) => list.push(r));
+      if (page * (d.pageSize || XM_PAGE_SIZE) >= (d.total || 0)) break;
+    }
+    return { id: String(c.id), list: list };
+  });
+  catResults.forEach((r) => {
+    r.list.forEach((x) => { xmById[String(x.id)] = x; });
+  });
+  if (!Object.keys(xmById).length) throw new Error("喜马拉雅目录为空");
+
+  // 2) Region ownership (search-by-region returns station ids per province).
+  const radioRegion = {};
+  const provinces = locs.filter((l) => l.type === 0 && String(l.id) !== "0");
+  const locResults = await mapBatched(provinces, async (l) => {
+    const d = await xmRetry("/radio-first-page-app/search", {
+      locationTypeId: 0, pageNum: 1, pageSize: XM_PAGE_SIZE,
+      categoryId: 0, locationId: l.id,
+    });
+    return { code: String(l.id), list: d.radios || [] };
+  });
+  locResults.forEach((r) => {
+    r.list.forEach((x) => {
+      const key = String(x.id);
+      if (!radioRegion[key]) radioRegion[key] = r.code;
+    });
+  });
+
+  // 3) Merge, skipping anything 云听 already has under the same name.
+  Object.keys(xmById).forEach((key) => {
+    const x = xmById[key];
+    const name = String(x.name || "");
+    const n = normName(name);
+    if (!name) return;
+    if (n.length >= 2 && seen[n]) {
+      meta.skipped++;
+      return; // 云听 wins
+    }
+    if (n.length >= 2) seen[n] = true; // avoid duplicates within 喜马拉雅 too
+
+    const id = "xm:" + key;
+    const regionCode = radioRegion[key];
+    const prov = regionCode
+      ? (provinces.filter((p) => String(p.id) === regionCode)[0] || {})
+      : {};
+    byId[id] = {
+      id: id,
+      name: name,
+      subtitle: x.programName ? ("正在直播：" + x.programName) : "",
+      image: String(x.coverLarge || x.coverSmall || "").replace(/^http:/, "https:"),
+      provinceCode: regionCode || "0",
+      region: prov.name || "网络",
+      source: "xm",
+      xmId: key,
+      xmCategoryId: String(x.categoryId || ""),
+      xmCategoryName: x.categoryName || catName[String(x.categoryId)] || "其他台",
+    };
+    const cat = XM_CAT_MAP[String(x.categoryId)] || OTHER_CAT;
+    if (!catIds[cat]) catIds[cat] = [];
+    if (catIds[cat].indexOf(id) < 0) catIds[cat].push(id);
+    const regionKey = regionCode || "0";
+    if (!regionIds[regionKey]) regionIds[regionKey] = [];
+    if (regionIds[regionKey].indexOf(id) < 0) regionIds[regionKey].push(id);
+    meta.count++;
+  });
+
+  return meta;
+}
+
 async function buildCatalog(previous) {
   const [provRes, catRes] = await Promise.all([
     apiRetry(API.provinces),
@@ -108,6 +274,10 @@ async function buildCatalog(previous) {
   ]);
   const provinces = provRes.data || [];
   const categories = catRes.data || [];
+  // Keep 云听's categories untouched, then append exactly one new bucket.
+  if (!categories.filter((x) => String(x.id) === OTHER_CAT).length) {
+    categories.push({ id: OTHER_CAT, categoryName: t("Other") });
+  }
   const byId = {};
   const regionIds = { "0": [] };
   const catIds = {};
@@ -187,6 +357,32 @@ async function buildCatalog(previous) {
     });
   });
 
+  // Merge 喜马拉雅. It is a secondary source: never let its failure make the
+  // whole catalog look partial or wipe the 云听 directory.
+  let xmMeta = null;
+  try {
+    xmMeta = await mergeXimalaya(previous, byId, catIds, regionIds);
+  } catch (err) {
+    console.log("cnradio: 喜马拉雅 merge failed: " + err.message);
+    failures.push("ximalaya");
+    // Restore the previous 喜马拉雅 stations so a transient failure does not
+    // silently drop them from an otherwise complete catalog.
+    if (previous && previous.byId) {
+      Object.keys(previous.byId).forEach((id) => {
+        const s = previous.byId[id];
+        if (!s || s.source !== "xm" || byId[id]) return;
+        byId[id] = s;
+        const cat = XM_CAT_MAP[s.xmCategoryId] || OTHER_CAT;
+        if (!catIds[cat]) catIds[cat] = [];
+        if (catIds[cat].indexOf(id) < 0) catIds[cat].push(id);
+        const regionKey = s.provinceCode || "0";
+        if (!regionIds[regionKey]) regionIds[regionKey] = [];
+        if (regionIds[regionKey].indexOf(id) < 0) regionIds[regionKey].push(id);
+      });
+    }
+  }
+  if (xmMeta) failures.push.apply(failures, xmMeta.failures);
+
   return {
     at: Date.now(),
     provinces: provinces,
@@ -195,18 +391,51 @@ async function buildCatalog(previous) {
     byId: byId,
     regionIds: regionIds,
     catIds: catIds,
+    xmCount: xmMeta ? xmMeta.count : Object.keys(byId).filter((k) => byId[k].source === "xm").length,
+    xmSkipped: xmMeta ? xmMeta.skipped : 0,
     partial: failures.length > 0,
     failures: failures,
   };
 }
 
-async function catalog(force) {
-  const saved = host.storage.get("catalog");
-  if (!force && saved && saved.at && saved.stations && saved.stations.length > 20) {
-    const ttl = saved.partial ? PARTIAL_TTL : CATALOG_TTL;
-    if (Date.now() - saved.at < ttl) return saved;
-  }
-  const built = await buildCatalog(saved);
+// ------------------------------------------------------- cache + background sync
+// The app reuses one plugin VM across calls (mygo-music internal/plugin/plugin.go:
+// p.running() returns p.vm once started), and its event loop stays alive between
+// calls, so a module-level setTimeout survives after home()/stations() return.
+// That makes a delayed, silent directory rebuild possible without blocking UI.
+const BG_REFRESH_DELAY = 20 * 1000;      // complete cache: refresh 20s after first use
+const BG_REFRESH_DELAY_STALE = 5 * 1000; // partial cache: repair sooner
+let bgTimer = null;
+let refreshTask = null;
+let lastBgRefreshAt = 0;
+
+function bgDelayOf(saved) {
+  // Test hook only: lets harness shorten the delay. Production uses the const.
+  let hook;
+  try { hook = globalThis.__cnradioTest; } catch (err) { /* no globalThis */ }
+  if (hook && typeof hook.bgDelay === "number") return hook.bgDelay;
+  return saved && saved.partial ? BG_REFRESH_DELAY_STALE : BG_REFRESH_DELAY;
+}
+
+function scheduleBackgroundRefresh(saved) {
+  if (bgTimer !== null || refreshTask) return;                 // already queued/running
+  if (Date.now() - lastBgRefreshAt < CATALOG_TTL) return;       // at most once per TTL
+  let hook;
+  try { hook = globalThis.__cnradioTest; } catch (err) { /* no globalThis */ }
+  if (hook) hook.bgScheduled = true;                            // observable in tests
+  bgTimer = setTimeout(() => {
+    bgTimer = null;
+    lastBgRefreshAt = Date.now();
+    refreshCatalog().catch((err) => {
+      // Silent by design: never surface a background failure to the listener.
+      console.log("cnradio: background refresh failed: " + err.message);
+    });
+  }, bgDelayOf(saved));
+  // Do not keep a test/CLI process alive just for the timer.
+  if (bgTimer && typeof bgTimer.unref === "function") bgTimer.unref();
+}
+
+function commitBuild(built, saved) {
   if (!built.partial) {
     host.storage.set("catalog", built);
     return built;
@@ -221,6 +450,32 @@ async function catalog(force) {
   return built;
 }
 
+async function refreshCatalog() {
+  if (refreshTask) return refreshTask; // manual refresh reuses an in-flight build
+  refreshTask = (async () => {
+    const saved = host.storage.get("catalog");
+    const built = await buildCatalog(saved);
+    return commitBuild(built, saved);
+  })();
+  try {
+    return await refreshTask;
+  } finally {
+    refreshTask = null;
+  }
+}
+
+async function catalog(force) {
+  const saved = host.storage.get("catalog");
+  // Cache-first: any usable local directory answers immediately. TTL is only
+  // a hint for scheduling a background refresh, never a reason to block.
+  if (!force && saved && saved.at && saved.stations && saved.stations.length > 20) {
+    scheduleBackgroundRefresh(saved);
+    return saved;
+  }
+  // No usable cache yet: build synchronously (there is nothing else to show).
+  return refreshCatalog();
+}
+
 function idsOf(c, ids, limit) {
   const out = [];
   const list = ids || [];
@@ -232,9 +487,15 @@ function idsOf(c, ids, limit) {
   return out;
 }
 
+// Public track/station ids: 云听 stays "live:<id>" (backward compatible),
+// 喜马拉雅 uses "xm:<id>". Both may carry a "~<instance>" suffix.
+function publicId(s) {
+  return s.source === "xm" ? s.id : "live:" + s.id;
+}
+
 function toStation(s) {
   return {
-    id: "live:" + s.id,
+    id: publicId(s),
     name: s.name,
     description: s.subtitle || s.region,
     imageUrl: s.image,
@@ -242,18 +503,22 @@ function toStation(s) {
 }
 
 function toTrack(s) {
+  const pid = publicId(s);
   return {
-    id: "live:" + s.id,
+    id: pid,
     name: s.name,
-    artists: [{ id: "live:" + s.id, name: s.subtitle || s.region }],
-    album: { id: "live:" + s.id, name: s.region, imageUrl: s.image },
+    artists: [{ id: pid, name: s.subtitle || s.region }],
+    album: { id: pid, name: s.region, imageUrl: s.image },
     duration: 0,
     imageUrl: s.image,
   };
 }
 
-function stationIdOf(id) {
-  return String(id).split("~")[0].replace(/^live:/, "");
+// Return the catalog key (byId) from a public id, preserving the source.
+function stationKeyOf(id) {
+  const raw = String(id).split("~")[0];
+  if (raw.indexOf("xm:") === 0) return raw;
+  return raw.replace(/^live:/, "");
 }
 
 // ------------------------------------------------------------------ app views
@@ -263,8 +528,8 @@ export async function home() {
   const national = idsOf(c, c.regionIds["0"]);
   const popular = idsOf(c, c.catIds["7"]);
   return {
-    title: t("Cloud Radio"),
-    subtitle: t("Live radio from radio.cn"),
+    title: t("Radio"),
+    subtitle: t("Live radio, sorted by category and region"),
     sections: [
       {
         title: t("National stations"),
@@ -340,7 +605,7 @@ async function replayPage(c, broadcastId) {
   const res = await api(API.programs, { date: date, broadcastId: String(broadcastId) });
   const items = res.data || [];
   const station = c.byId[String(broadcastId)];
-  const stationName = station ? station.name : t("Cloud Radio");
+  const stationName = station ? station.name : t("Radio");
   const tracks = [];
   items.forEach((p) => {
     const high = p.playUrlHigh || "";
@@ -498,15 +763,16 @@ let instance = 0;
 
 export async function stationNext({ id }) {
   const c = await catalog();
-  const sid = stationIdOf(id);
+  const sid = stationKeyOf(id);
   const s = c.byId[sid];
   if (!s) throw fail("unavailable", t("This station is gone"));
   instance += 1;
+  const pid = publicId(s);
   return [{
-    id: "live:" + sid + "~" + instance,
+    id: pid + "~" + instance,
     name: s.name,
-    artists: [{ id: "live:" + sid, name: s.subtitle || s.region }],
-    album: { id: "live:" + sid, name: s.name, imageUrl: s.image },
+    artists: [{ id: pid, name: s.subtitle || s.region }],
+    album: { id: pid, name: s.name, imageUrl: s.image },
     duration: 0,
     imageUrl: s.image,
   }];
@@ -546,6 +812,21 @@ async function liveHls(sid, low) {
   return url;
 }
 
+// 喜马拉雅 stream URLs are stable, but re-query the detail endpoint on every
+// play so a changed feed is picked up. aac* segments are raw ADTS.
+async function xmLiveHls(sid, low) {
+  const c = await catalog();
+  const st = c.byId[sid];
+  if (!st) throw fail("unavailable", t("This station is gone"));
+  const info = await xmRetry(XM_LIVE_BASE + "/live-web/v1/radio", { radioId: st.xmId });
+  const urls = (info && info.playUrl) || {};
+  const pick = low
+    ? (urls.aac24 || urls.aac64 || urls.ts24 || urls.ts64)
+    : (urls.aac64 || urls.aac24 || urls.ts64 || urls.ts24);
+  if (!pick) throw fail("unavailable", t("This station has no stream"));
+  return { url: String(pick).replace(/^http:/, "https:"), rawAac: /\.aac|\/24\.m3u8|\/64\.m3u8/.test(String(pick)) && String(pick).indexOf("transcode=ts") < 0 };
+}
+
 let bridgeState = null;
 
 function killBridge() {
@@ -580,7 +861,9 @@ function scriptPath() {
   return dir + "/bridge.py";
 }
 
-async function ensureBridge(sid, hls, mode) {
+async function ensureBridge(sid, hls, mode, source) {
+  const rawAac = !!(source && source.rawAac);
+  const referer = rawAac ? XM_REFERER : REFERER;
   if (mode !== "ffmpeg" && bridgeState && bridgeState.sid === sid && bridgeState.kind === "python") {
     return bridgeState; // Python bridge serves any number of connections
   }
@@ -592,7 +875,8 @@ async function ensureBridge(sid, hls, mode) {
     const port = 21000 + Math.floor(Math.random() * 9000);
     let args;
     if (cand.kind === "python") {
-      args = [scriptPath(), "--url", hls, "--port", String(port)];
+      args = [scriptPath(), "--url", hls, "--port", String(port),
+        "--mode", rawAac ? "aac" : "ts", "--referer", referer];
     } else {
       args = [
         "-hide_banner", "-loglevel", "error",
@@ -661,13 +945,22 @@ export async function stream({ id, quality }) {
     return { url: url, type: "m4a", headers: { "Referer": REFERER } };
   }
 
-  const sid = stationIdOf(raw);
-  const hls = await liveHls(sid, low);
+  const sid = stationKeyOf(raw);
+  const isXm = raw.indexOf("xm:") === 0;
   const mode = host.setting("bridge") || "auto";
+
+  let hls;
+  let source = { rawAac: false };
+  if (isXm) {
+    source = await xmLiveHls(sid, low);
+    hls = source.url;
+  } else {
+    hls = await liveHls(sid, low);
+  }
 
   // Debug only: MyGo Music's ADTS decoder rejects a playlist (first byte is '#').
   if (mode === "direct") return { url: hls, type: "aac" };
 
-  const bridge = await ensureBridge(sid, hls, mode);
+  const bridge = await ensureBridge(sid, hls, mode, source);
   return { url: bridge.url, type: "aac" };
 }

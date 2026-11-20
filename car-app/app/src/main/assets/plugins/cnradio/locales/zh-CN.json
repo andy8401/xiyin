@@ -1,6 +1,5 @@
 {
-  "云听 · 央广在线收音机": "云听 · 央广在线收音机",
-  "云听首页": "云听首页",
+  "收音机": "收音机",
   "全部电台": "全部电台",
   "按地区": "按地区",
   "按类型": "按类型",
@@ -13,7 +12,7 @@
   "Command name on PATH, normally ffmpeg. Only used when the bridge is set to ffmpeg or when Python is unavailable.": "PATH 上的命令名，通常是 ffmpeg。仅在转流方式选 ffmpeg 或 Python 不可用时使用。",
   "Live quality / 直播码率": "直播码率",
   "high = playUrlMulti / mp3PlayUrlHigh; low = mp3PlayUrlLow / playUrlLow. 填 high 或 low，默认 high。": "high = playUrlMulti / mp3PlayUrlHigh；low = mp3PlayUrlLow / playUrlLow。填 high 或 low，默认 high。",
-  "Cloud Radio": "云听",
+  "Cloud Radio": "收音机",
   "Live radio from radio.cn": "来自 radio.cn 的电台直播",
   "National stations": "国家台",
   "Popular": "热门",
@@ -36,5 +35,8 @@
   "Rebuild the station directory": "重新拉取全部电台",
   "Some regions failed, kept the last complete directory": "部分地区拉取失败，已沿用上一次的完整目录",
   "Local stations": "本地电台",
-  "National stations (available everywhere)": "全国台（各地均可收听）"
+  "National stations (available everywhere)": "全国台（各地均可收听）",
+  "Other": "其他",
+  "Radio": "收音机",
+  "Live radio, sorted by category and region": "按分类与地区整理的电台直播"
 }

@@ -68,6 +68,42 @@ func TestPlayAtJumpsWithinQueue(t *testing.T) {
 	}
 }
 
+// Queue is circular: Next past the last row wraps to the first and Prev before
+// the first wraps to the last. This drives the car head unit's saved-station
+// queue, where "next" at the final station must return to the first one.
+func TestQueueWrapsAround(t *testing.T) {
+	resetBridge(t)
+	defer resetBridge(t)
+	SetHostBridge(testHost{})
+	SetMediaOutput(&testMedia{})
+	SetListener(&testListener{})
+	if _, err := Init(testDataDir(t)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := PlayQueueJSON("demo", demoQueueJSON(), 0); err != nil {
+		t.Fatalf("PlayQueueJSON: %v", err)
+	}
+
+	// Walk to the last row (index 2), then Next must wrap to 0.
+	if err := PlayAt(2); err != nil {
+		t.Fatalf("PlayAt(2): %v", err)
+	}
+	if err := Next(); err != nil {
+		t.Fatalf("Next from last: %v", err)
+	}
+	if got := queueIndex(t); got != 0 {
+		t.Errorf("Next from last = %d, want 0", got)
+	}
+
+	// From index 0, Prev must wrap to the last row (index 2).
+	if err := Prev(); err != nil {
+		t.Fatalf("Prev from first: %v", err)
+	}
+	if got := queueIndex(t); got != 2 {
+		t.Errorf("Prev from first = %d, want 2", got)
+	}
+}
+
 func TestPlayAtRejectsOutOfRange(t *testing.T) {
 	resetBridge(t)
 	defer resetBridge(t)
