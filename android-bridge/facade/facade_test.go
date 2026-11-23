@@ -16,12 +16,17 @@ func (testHost) OpenURL(string) error                 { return nil }
 func (testHost) WebSignInJSON(string) (string, error) { return `{}`, nil }
 func (testHost) Toast(string)                         {}
 
-type testMedia struct{ loaded string }
+type testMedia struct {
+	loaded string
+	seekMs int64
+	plays  int
+	pauses int
+}
 
 func (m *testMedia) Load(url, headers string) error { m.loaded = url; return nil }
-func (m *testMedia) Play()                          {}
-func (m *testMedia) Pause()                         {}
-func (m *testMedia) SeekMs(int64)                   {}
+func (m *testMedia) Play()                          { m.plays++ }
+func (m *testMedia) Pause()                         { m.pauses++ }
+func (m *testMedia) SeekMs(ms int64)                { m.seekMs = ms }
 func (m *testMedia) SetVolume(float64)              {}
 
 type testListener struct{ changes, errors []string }
@@ -39,7 +44,11 @@ func resetBridge(t *testing.T) {
 	b.plugins = nil
 	b.queueJSON = ""
 	b.queuePluginID = ""
+	b.queueStationID = ""
+	b.order = nil
 	b.queueAt = 0
+	b.shuffle = false
+	b.repeat = repeatAll
 	b.playing = false
 	b.signingIn = nil
 }

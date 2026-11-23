@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -45,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.andy8401.mygo.car.data.LyricsText
@@ -202,15 +204,27 @@ private fun PlayerStage(
                     Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Filled.Shuffle, "随机", tint = TextMuted, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(32.dp))
+                    PlayModeIcon(
+                        Icons.Filled.Shuffle,
+                        if (ui.player.shuffle) "关闭随机播放" else "开启随机播放",
+                        ui.player.shuffle
+                    ) { vm.toggleShuffle() }
+                    Spacer(Modifier.width(16.dp))
                     TransportIcon(Icons.Filled.SkipPrevious, "上一首", 38.dp) { vm.prev() }
                     Spacer(Modifier.width(28.dp))
                     PlayButton(player.playing, 76.dp) { vm.togglePlay() }
                     Spacer(Modifier.width(28.dp))
                     TransportIcon(Icons.Filled.SkipNext, "下一首", 38.dp) { vm.next() }
-                    Spacer(Modifier.width(32.dp))
-                    Icon(Icons.Filled.Repeat, "循环", tint = TextMuted, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(16.dp))
+                    PlayModeIcon(
+                        if (ui.player.repeat == "one") Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+                        when (ui.player.repeat) {
+                            "one" -> "单曲循环，点击改为不循环"
+                            "all" -> "清单循环，点击改为单曲循环"
+                            else -> "不循环，点击改为清单循环"
+                        },
+                        ui.player.repeat != "off"
+                    ) { vm.cycleRepeat() }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -236,6 +250,22 @@ private fun PlayerStage(
                 QueuePane(player) { vm.playAt(it) }
             }
         }
+    }
+}
+
+/** Mode buttons need a car-sized hit target even though the glyph is small. */
+@Composable
+private fun PlayModeIcon(
+    icon: ImageVector,
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        Modifier.size(48.dp).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, label, tint = if (active) Gold else TextMuted, modifier = Modifier.size(22.dp))
     }
 }
 

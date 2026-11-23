@@ -149,8 +149,12 @@ fun CarScreen(vm: MainViewModel) {
         val contentHeight = if (wide) safeHeight else contentWidth * 9f / 16f
 
         // Full safe area: dark background tints the transparent system bars.
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // The 16:9 / maximized app surface, centred inside the safe area.
+        // Pin the surface to the LEFT edge: centring a height-derived 16:9 box
+        // on an ultra-wide Lynk & Co panel leaves a dark strip to the left of
+        // the rail that the driver reads as an empty margin. The spare width
+        // belongs on the RIGHT, after the content, never before the rail.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+            // The 16:9 / maximized app surface, left-aligned inside the safe area.
             Box(Modifier.width(contentWidth).height(contentHeight).background(Background)) {
                 Row(Modifier.fillMaxSize()) {
                     LeftRail(ui, vm, contentHeight)
@@ -848,6 +852,7 @@ private fun SettingsContent(ui: MainViewModel.UiState, vm: MainViewModel) {
     ) {
         SettingRow("音质", ui.settings.quality) { q -> vm.setQuality(q) }
         SwitchRow("显示歌词", ui.settings.lyrics) { on -> vm.setLyricsEnabled(on) }
+        SwitchRow("启动时续播", ui.settings.autoResume) { on -> vm.setAutoResume(on) }
         Text(
             "插件管理 ›",
             color = Cyan, style = MaterialTheme.typography.titleMedium.copy(fontSize = 22.sp),
@@ -1058,9 +1063,10 @@ private fun PlayerBar(
     availableHeight: androidx.compose.ui.unit.Dp
 ) {
     // The first head-unit photo still showed a thin strip with tiny glyphs.
-    // Raise every floor and derive sizes from a taller bar, but keep the
-    // group centered: on a 32:10 panel a stretched row scatters the controls
-    // too far apart for the driver.
+    // Raise every floor and derive sizes from a taller bar. The whole bar is
+    // narrowed to 90% of the content width and split into left / centre /
+    // right zones so the artwork reads from the left and the transport sits
+    // on the panel's true centre — see the zone comments below.
     val barHeight = maxOf(124.dp, minOf(availableHeight * 0.24f, 280.dp))
     val coverSize = maxOf(90, minOf((barHeight.value * 0.68f).toInt(), 180))
     val sideIcon = maxOf(44.dp, minOf(barHeight * 0.36f, 80.dp))
@@ -1068,48 +1074,43 @@ private fun PlayerBar(
     val buttonSize = sideIcon + 12.dp
     val titleSize = maxOf(22f, minOf(barHeight.value * 0.17f, 34f))
     val subSize = maxOf(17f, minOf(barHeight.value * 0.13f, 25f))
+    // Three zones across a narrower bar: cover+title pinned left, transport
+    // centered on the panel, favourites/queue on the right. The previous build
+    // packed everything into one centred group, so the artwork and title sat in
+    // the middle and the controls drifted right of centre on a wide screen.
     Row(
-        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().height(barHeight).background(Surface)
+        modifier = Modifier.fillMaxWidth(0.9f).height(barHeight).background(Surface)
             .clickable { onOpen() }
     ) {
+        // LEFT — artwork and identification, text left-aligned.
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.padding(horizontal = 20.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f).padding(start = 20.dp)
         ) {
             CoverImage(player.currentTrack?.name ?: "·", coverSize,
                 imageUrl = player.currentTrack?.imageUrl ?: "")
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.widthIn(min = 220.dp, max = 380.dp)
+                horizontalAlignment = Alignment.Start,
+                modifier = Modifier.weight(1f)
             ) {
                 Text(player.currentTrack?.name ?: "未播放", color = Text,
                     style = MaterialTheme.typography.titleMedium.copy(fontSize = titleSize.sp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Start,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(player.currentTrack?.artistText ?: "选择一首歌开始", color = TextMuted,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = subSize.sp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Start,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            // Host-local favourite of whatever is playing (song or station),
-            // scoped to the owning source. No plugin API involved.
-            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(buttonSize)) {
-                Icon(
-                    if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    if (favorite) "取消收藏" else "收藏",
-                    tint = if (favorite) Cyan else TextMuted,
-                    modifier = Modifier.size(sideIcon)
-                )
-            }
-            // The queue is one tap away from the bar: a head unit should not need
-            // the full player for "what is coming next".
-            IconButton(onClick = onOpenQueue, modifier = Modifier.size(buttonSize)) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放清单", tint = TextMuted,
-                    modifier = Modifier.size(sideIcon))
-            }
+        }
+        // CENTER — transport, anchored to the true centre of the panel by the
+        // equal-weight spacers on either side.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             IconButton(onClick = { vm.prev() }, modifier = Modifier.size(buttonSize)) {
                 Icon(Icons.Filled.SkipPrevious, "上一首", tint = Cyan,
                     modifier = Modifier.size(sideIcon))
@@ -1121,6 +1122,26 @@ private fun PlayerBar(
             }
             IconButton(onClick = { vm.next() }, modifier = Modifier.size(buttonSize)) {
                 Icon(Icons.Filled.SkipNext, "下一首", tint = Cyan,
+                    modifier = Modifier.size(sideIcon))
+            }
+        }
+        // RIGHT — host-local favourite of whatever is playing (song or station,
+        // scoped to the owning source) plus the one-tap queue button.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.weight(1f).padding(end = 20.dp)
+        ) {
+            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(buttonSize)) {
+                Icon(
+                    if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    if (favorite) "取消收藏" else "收藏",
+                    tint = if (favorite) Cyan else TextMuted,
+                    modifier = Modifier.size(sideIcon)
+                )
+            }
+            IconButton(onClick = onOpenQueue, modifier = Modifier.size(buttonSize)) {
+                Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放清单", tint = TextMuted,
                     modifier = Modifier.size(sideIcon))
             }
         }

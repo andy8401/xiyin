@@ -34,10 +34,21 @@ class MediaOutputImpl(context: Context) : MediaOutput {
                     runCatching { Facade.ended() }
                         .onFailure { Log.e(TAG, "Facade.ended failed", it) }
                 }
+                // Keep a fresh resume point while actually rendering media.
+                if (playbackState == Player.STATE_READY && player.isPlaying) {
+                    PlaybackHolder.noteCurrentPosition()
+                }
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                Log.e(TAG, "ExoPlayer error", error)
+                // Load retries (PatientErrorPolicy) are already exhausted here.
+                // Do NOT call retry(): that would fight the policy and spin.
+                // Snapshot the last good position and arm the reconnect flag;
+                // the connectivity callback re-resolves the (possibly expired)
+                // URL and seeks back to this point once the network returns.
+                PlaybackHolder.noteCurrentPosition()
+                PlaybackHolder.markNeedReconnect()
+                Log.e(TAG, "ExoPlayer error; awaiting network recovery to reconnect", error)
             }
         })
     }
@@ -61,6 +72,8 @@ class MediaOutputImpl(context: Context) : MediaOutput {
         Log.i(TAG, "load " + url.substringBefore('?') + " mime=" + (hlsMimeType(url) ?: "auto"))
         val item = builder.build()
         onPlayerThread {
+            // A new item starts a new track: drop any stale reconnect point.
+            PlaybackHolder.clearResume()
             player.setMediaItem(item)
             player.prepare()
         }

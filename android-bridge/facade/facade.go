@@ -60,7 +60,10 @@ type bridge struct {
 	queueJSON      string
 	queuePluginID  string
 	queueStationID string // non-empty while a live station feeds the queue
-	queueAt        int
+	order          []int  // queue indices in play order; shuffled or natural
+	queueAt        int    // position in order (NOT the raw track index)
+	shuffle        bool
+	repeat         int // repeatOff / repeatAll / repeatOne (see player.go)
 	playing        bool
 	volume         float64
 

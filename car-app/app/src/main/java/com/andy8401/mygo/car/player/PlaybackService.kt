@@ -3,8 +3,15 @@ package com.andy8401.mygo.car.player
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
@@ -27,12 +34,19 @@ import facade.Facade
 class PlaybackService : MediaSessionService() {
 
     private lateinit var mediaSession: MediaSession
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Dedicated single thread for reconnect JNI calls: never the player/main
+     *  thread, and serialized so a network flap cannot fire two reloads. */
+    private val reconnectThread = HandlerThread("media-reconnect").apply { start() }
+    private val reconnectHandler = Handler(reconnectThread.looper)
 
     override fun onCreate() {
         super.onCreate()
         // Make sure the Go bridge (and therefore MediaOutput) is installed even
         // if a controller connects before the user touches the smoke UI.
         GoBridge.init(this)
+        registerNetworkRecovery()
         enterForeground()
         val contentIntent = PendingIntent.getActivity(
             this,
@@ -51,8 +65,46 @@ class PlaybackService : MediaSessionService() {
         if (::mediaSession.isInitialized) mediaSession else null
 
     override fun onDestroy() {
+        networkCallback?.let {
+            runCatching {
+                getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it)
+            }
+        }
+        networkCallback = null
+        reconnectThread.quit()
         if (::mediaSession.isInitialized) mediaSession.release()
         super.onDestroy()
+    }
+
+    /**
+     * Long network drops outlive ExoPlayer's own retries and surface as
+     * onPlayerError (which arms PlaybackHolder.needReconnect). When the network
+     * comes back, re-resolve the stream through Go and seek back to the saved
+     * position. Short dropouts never reach here — the load policy eats them.
+     */
+    private fun registerNetworkRecovery() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // Be conservative: a restored network may still lack Internet.
+                // Only act when a reconnect was actually armed by an error.
+                val resumeMs = PlaybackHolder.pendingResumeMs() ?: return
+                reconnectHandler.post {
+                    try {
+                        Log.i(TAG, "network restored; reconnecting at ${resumeMs}ms")
+                        Facade.reloadCurrent(resumeMs)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "reloadCurrent after network recovery failed", t)
+                    }
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+            .onFailure { Log.e(TAG, "registerNetworkCallback failed", it) }
+        networkCallback = cb
     }
 
     /**
@@ -110,6 +162,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private companion object {
+        const val TAG = "PlaybackService"
         const val NOTIFICATION_ID = 1001
     }
 }

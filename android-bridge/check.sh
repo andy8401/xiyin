@@ -33,7 +33,7 @@ echo
 echo "== Required API presence =="
 api="$("$JAVA_HOME/bin/javap.exe" facade.Facade 2>/dev/null)"
 missing=0
-for fn in setHostBridge setMediaOutput setListener init loadPlugin listPluginsJSON browseJSON searchJSON openDetailJSON lyricsJSON playQueueJSON playStationJSON playAt queueJSON togglePlay next prev seekMs setVolume ended stateJSON resolveStreamJSON settingsJSON setSettingJSON hasCapability version appSettingsJSON setSettingsJSON saveSessionJSON restoreSessionJSON clearSession addLocalFolders localFoldersJSON rescanLibrary localTracksJSON localSearchJSON installPluginFromPath installPluginFromRepo uninstallPlugin pluginOriginsJSON checkPluginUpdatesJSON signInJSON signOutJSON accountJSON; do
+for fn in setHostBridge setMediaOutput setListener init loadPlugin listPluginsJSON browseJSON searchJSON openDetailJSON lyricsJSON playQueueJSON playStationJSON playAt queueJSON togglePlay next prev seekMs setVolume setShuffle cycleRepeat saveSession resumeSession reloadCurrent refreshContent ended stateJSON resolveStreamJSON settingsJSON setSettingJSON hasCapability version appSettingsJSON setSettingsJSON saveSessionJSON restoreSessionJSON clearSession addLocalFolders localFoldersJSON rescanLibrary localTracksJSON localSearchJSON installPluginFromPath installPluginFromRepo uninstallPlugin pluginOriginsJSON checkPluginUpdatesJSON signInJSON signOutJSON accountJSON; do
   if echo "$api" | grep -q " $fn("; then
     printf "  ok   %s\n" "$fn"
   else

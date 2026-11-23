@@ -267,7 +267,10 @@ data class PlayerState(
     /** Owning plugin of the queue (music.Track.source is per track). */
     val pluginId: String = "",
     /** Non-empty while a live station feeds the queue; its rows are a moving window. */
-    val stationId: String = ""
+    val stationId: String = "",
+    /** Playback mode, mirrored from the Go bridge. repeat is off|all|one. */
+    val shuffle: Boolean = false,
+    val repeat: String = "all"
 )
 
 /** One timed line of lyrics. Times are milliseconds from the track's start. */
@@ -297,7 +300,12 @@ data class AppSettings(
     val appearance: String = "system",
     val normalize: Boolean = false,
     /** Show the lyrics pane in the now-playing screen. */
-    val lyrics: Boolean = true
+    val lyrics: Boolean = true,
+    /** Playback mode persisted by the Go bridge in settings.json. */
+    val shuffle: Boolean = false,
+    val repeat: String = "all",
+    /** Whether a boot resumes playback. Off by default: no surprise noise. */
+    val autoResume: Boolean = false
 )
 
 object Json {
@@ -544,7 +552,9 @@ object Json {
             currentTrack = tracks.getOrNull(index),
             queue = tracks,
             pluginId = o.optString("pluginId", ""),
-            stationId = o.optString("stationId", "")
+            stationId = o.optString("stationId", ""),
+            shuffle = o.optBoolean("shuffle", false),
+            repeat = o.optString("repeat", "all").ifBlank { "all" }
         )
     }
 

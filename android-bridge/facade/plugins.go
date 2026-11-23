@@ -52,6 +52,8 @@ func Init(dataDir string) (int, error) {
 	if err := InitState(dataDir); err != nil {
 		return 0, err
 	}
+	// Playback mode is a driver preference, so it survives a head-unit restart.
+	b.shuffle, b.repeat = loadPlaybackMode()
 	initLibrary(dataDir)
 
 	dir := filepath.Join(dataDir, "plugins")
@@ -139,7 +141,22 @@ func pluginByID(id string) (*plugin.Plugin, error) {
 
 // BrowseJSON returns a plugin's Home page (page == "" or "home") or a named
 // Browse page, serialized as a music.Browse JSON object.
+//
+// Content is cached on disk under a bounded LRU policy (see cache.go). A cached
+// entry is returned immediately so re-opening a page never waits on the
+// network; the startup refresh (RefreshContent) replaces it in the background
+// and emits a contentUpdated event for the UI to pick up. Only the first open,
+// before a cache exists, actually calls the plugin. Old, unvisited entries are
+// evicted once the per-plugin entry/byte limits are reached.
 func BrowseJSON(pluginID, page string) (string, error) {
+	norm := page
+	if norm == "" {
+		norm = "home"
+	}
+	key := cacheKey("browse", norm)
+	if env, ok := readEnvelope(pluginID, key); ok {
+		return string(env.Data), nil
+	}
 	b.mu.Lock()
 	p, err := pluginByID(pluginID)
 	b.mu.Unlock()
@@ -147,15 +164,21 @@ func BrowseJSON(pluginID, page string) (string, error) {
 		return "", err
 	}
 	var browse *music.Browse
-	if page == "" || page == "home" {
+	if norm == "home" {
 		browse, err = p.Home()
 	} else {
-		browse, err = p.Browse(page)
+		browse, err = p.Browse(norm)
 	}
 	if err != nil {
 		return "", err
 	}
-	return jsonMarshal(browse)
+	data, err := jsonMarshal(browse)
+	if err != nil {
+		return "", err
+	}
+	// Cache is best-effort: a disk failure must not fail playback/UI.
+	_ = writeEnvelope(pluginID, key, "browse", norm, "", "", 0, data)
+	return data, nil
 }
 
 // SearchJSON runs a plugin search and returns a music.SearchResult as JSON.

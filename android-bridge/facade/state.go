@@ -26,6 +26,13 @@ type AppSettings struct {
 	// Lyrics shows the lyrics pane in the now-playing screen. Default on: a
 	// source without lyrics answers with its own "no lyrics" text.
 	Lyrics bool `json:"lyrics"`
+	// Shuffle and Repeat are the playback mode, persisted here so a restart
+	// keeps the driver's choice. Repeat is one of "off", "all", "one".
+	Shuffle bool   `json:"shuffle"`
+	Repeat  string `json:"repeat"`
+	// AutoResume lets the driver choose whether a boot restarts playback.
+	// Default off: a car must not start making noise on its own.
+	AutoResume bool `json:"autoResume"`
 }
 
 // syncLanguage speaks the setting in the i18n package the plugin host reads.
@@ -45,6 +52,9 @@ func defaultAppSettings() AppSettings {
 		Appearance: "system",
 		CacheMB:    2048,
 		Lyrics:     true,
+		Shuffle:    false,
+		Repeat:     "all",
+		AutoResume: false,
 	}
 }
 
@@ -54,8 +64,14 @@ func defaultAppSettings() AppSettings {
 type Session struct {
 	SourceID  string `json:"sourceId"`
 	QueueJSON string `json:"queueJson"`
-	Index     int    `json:"index"`
+	Index     int    `json:"index"`    // raw queue index, survives shuffle
 	Position  int64  `json:"position"` // milliseconds, last known from Kotlin
+	// StationID is set while a live station feeds the queue. Restoring it asks
+	// the plugin for its current segment instead of walking a stale queue.
+	StationID string `json:"stationId,omitempty"`
+	// Playing records what the driver was doing, but whether playback actually
+	// restarts is the autoResume setting, never inferred from this alone.
+	Playing bool `json:"playing"`
 }
 
 type stateStore struct {
@@ -139,14 +155,39 @@ func SetSettingsJSON(patch string) error {
 		return err
 	}
 	merged := st.settings
-	if _, ok := raw["language"]; ok { merged.Language = p.Language }
-	if _, ok := raw["source"]; ok { merged.Source = p.Source }
-	if _, ok := raw["quality"]; ok { merged.Quality = p.Quality }
-	if _, ok := raw["volume"]; ok { merged.Volume = p.Volume }
-	if _, ok := raw["normalize"]; ok { merged.Normalize = p.Normalize }
-	if _, ok := raw["appearance"]; ok { merged.Appearance = p.Appearance }
-	if _, ok := raw["cacheMB"]; ok { merged.CacheMB = p.CacheMB }
-	if _, ok := raw["lyrics"]; ok { merged.Lyrics = p.Lyrics }
+	if _, ok := raw["language"]; ok {
+		merged.Language = p.Language
+	}
+	if _, ok := raw["source"]; ok {
+		merged.Source = p.Source
+	}
+	if _, ok := raw["quality"]; ok {
+		merged.Quality = p.Quality
+	}
+	if _, ok := raw["volume"]; ok {
+		merged.Volume = p.Volume
+	}
+	if _, ok := raw["normalize"]; ok {
+		merged.Normalize = p.Normalize
+	}
+	if _, ok := raw["appearance"]; ok {
+		merged.Appearance = p.Appearance
+	}
+	if _, ok := raw["cacheMB"]; ok {
+		merged.CacheMB = p.CacheMB
+	}
+	if _, ok := raw["lyrics"]; ok {
+		merged.Lyrics = p.Lyrics
+	}
+	if _, ok := raw["shuffle"]; ok {
+		merged.Shuffle = p.Shuffle
+	}
+	if _, ok := raw["repeat"]; ok {
+		merged.Repeat = p.Repeat
+	}
+	if _, ok := raw["autoResume"]; ok {
+		merged.AutoResume = p.AutoResume
+	}
 	if err := writeAtomic(settingsPath(), merged); err != nil {
 		return err
 	}
@@ -157,6 +198,27 @@ func SetSettingsJSON(patch string) error {
 	syncLanguage(merged.Language)
 	notify(map[string]any{"event": "settings", "value": merged})
 	return nil
+}
+
+// persistPlaybackMode writes the live playback mode to settings.json. The mode
+// setters hold b.mu while calling it; this function holds st.mu.
+func persistPlaybackMode(shuffle bool, repeat int) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.dataDir == "" {
+		return fmt.Errorf("state store not initialized")
+	}
+	st.settings.Shuffle = shuffle
+	st.settings.Repeat = repeatName(repeat)
+	return writeAtomic(settingsPath(), st.settings)
+}
+
+// loadPlaybackMode returns the persisted mode for Init to copy into the live
+// bridge. An old settings.json without these fields yields (false, repeatAll).
+func loadPlaybackMode() (bool, int) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.settings.Shuffle, parseRepeat(st.settings.Repeat)
 }
 
 // SaveSessionJSON persists a playback snapshot. Kotlin should call this on

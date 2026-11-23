@@ -27,7 +27,9 @@ import com.andy8401.mygo.car.data.Section
 import com.andy8401.mygo.car.data.SignInPrompt
 import com.andy8401.mygo.car.data.SourceInfo
 import com.andy8401.mygo.car.data.Track
+import com.andy8401.mygo.car.data.UiStateStore
 import com.andy8401.mygo.car.data.toFavorite
+import com.andy8401.mygo.car.player.PlaybackHolder
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -89,6 +91,10 @@ class MainViewModel : ViewModel() {
         val activeNav: NavItem? = null,
         val page: Page = Page.HOME,
         val browse: Browse? = null,
+        /** Cache key of the content currently on screen, used to decide whether
+         *  a background-refresh event should replace what the user is viewing.
+         *  Mirrors the Go facade key: "browse|<page>" or "detail|<kind>|<id>|<offset>". */
+        val contentKey: String = "",
         /** Stack of screens pushed when opening a detail/folder page. */
         val browseBackStack: List<BrowseBackEntry> = emptyList(),
         val search: SearchResult = SearchResult(),
@@ -199,54 +205,111 @@ class MainViewModel : ViewModel() {
 
     /** Favourites are owned by the host, not by Go or any plugin. */
     private var favoriteStore: FavoriteStore? = null
+    private var uiStateStore: UiStateStore? = null
     private var appContext: Context? = null
+
+    /** Snapshot writes are coalesced: track/playing events burst on a seek. */
+    private val sessionHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val saveSessionRunnable = Runnable { saveSessionNow() }
 
     fun init(context: Context) {
         if (_ui.value.ready) return
         appContext = context.applicationContext
         if (favoriteStore == null) favoriteStore = FavoriteStore(context.applicationContext)
+        if (uiStateStore == null) uiStateStore = UiStateStore(context.applicationContext)
         val savedFavorites = favoriteStore!!.all()
+        val savedUi = uiStateStore!!.load()
         guarded.launch {
             val count = GoBridge.init(context)
             GoBridge.startPlaybackService(context)
-            // The release build seeds both default plugins from GitHub repos.
-            // Repo installs carry .origin.json, so 检查更新 can keep them current;
-            // assets are only an offline first-boot fallback in GoBridge.
-            val installFailures = ensureDefaultPlugins()
+            // First screen uses whatever is already installed (including the
+            // bundled plugins GoBridge unpacked from assets) so the plugin list
+            // shows immediately. Seeding from GitHub — a one-time network step —
+            // is deferred to a background launch below, so a slow/unavailable
+            // network can never hold the UI hostage on first boot.
             val plugins = MusicRepository.sources()
             // Local library is a source of its own, not a category inside every
             // plugin. Keep it last so a real plugin stays the default.
             val sources = plugins + localSource()
             val settings = MusicRepository.appSettings()
+            // Rebuild the Go queue/station before reading player state, so the
+            // first frame already shows the restored track and its position.
+            runCatching { MusicRepository.resumeSession(settings.autoResume) }
+                .onFailure { android.util.Log.w("MyGoSession", "resumeSession failed", it) }
             val player = MusicRepository.queue()
             val firstPlugin = plugins.firstOrNull()
-            val useLocal = firstPlugin == null
-            val activeId = firstPlugin?.id ?: LOCAL_ID
-            val localBrowse = if (useLocal) runCatching { MusicRepository.localTracks() }.getOrNull() else null
+
+            // Restore where the driver was, never to a source that was removed
+            // while the app was closed.
+            val savedSourceId = savedUi?.sourceId?.takeIf { id ->
+                id == LOCAL_ID || plugins.any { it.id == id }
+            }
+            val activeId = savedSourceId ?: (firstPlugin?.id ?: LOCAL_ID)
+            val activeSource = sources.firstOrNull { it.id == activeId }
+            val savedNav = savedUi?.navKey?.takeIf { it.isNotBlank() }
+                ?.let { key -> activeSource?.navigation?.firstOrNull { it.key == key } }
+            val activeNav = if (activeId == LOCAL_ID) null else savedNav ?: defaultNav(activeSource)
+            val restoredPage = runCatching { savedUi?.page?.let { Page.valueOf(it) } }.getOrNull()
+            val page = if (activeId == LOCAL_ID) Page.LIBRARY else (restoredPage ?: Page.HOME)
+            val localBrowse = if (page == Page.LIBRARY)
+                runCatching { MusicRepository.localTracks() }.getOrNull() else null
+            val restoredPane = savedUi?.playerPane?.let { key ->
+                runCatching { PlayerPane.valueOf(key) }.getOrNull()
+            } ?: PlayerPane.LYRICS
+
             _ui.value = _ui.value.copy(
                 ready = true,
                 version = MusicRepository.version(),
                 sources = sources,
                 activeSourceId = activeId,
-                activeNav = defaultNav(firstPlugin),
-                page = if (useLocal) Page.LIBRARY else Page.HOME,
+                activeNav = activeNav,
+                page = page,
                 browse = localBrowse,
                 player = player,
                 favorites = savedFavorites,
                 settings = settings,
+                playerOpen = savedUi?.playerOpen ?: false,
+                playerPane = restoredPane,
+                maximized = savedUi?.maximized ?: false,
                 message = when {
-                    installFailures.isNotEmpty() ->
-                        "默认插件已用内置版本启动（${installFailures.joinToString("、")}安装失败），可在插件管理中重试"
-                    useLocal -> "未安装插件，已显示本地曲库"
+                    activeId == LOCAL_ID -> "未安装插件，已显示本地曲库"
                     else -> "已加载 $count 个音源"
                 }
             )
-            if (!useLocal) refreshBrowse()
+            if (activeId != LOCAL_ID) refreshBrowse()
             refreshPluginMeta()
             refreshAccounts()
+
+            // One-time GitHub seeding runs AFTER first paint. A successful
+            // install emits pluginInstalled, which afterPluginListChanged()
+            // picks up to refresh the list automatically. Failures only add a
+            // hint; the bundled plugins keep working and a later boot retries.
+            guarded.launch {
+                val installFailures = ensureDefaultPlugins()
+                // Refresh explicitly rather than trusting event timing: events
+                // use replay=1, so a burst of pluginInstalled could overwrite
+                // each other before the collector catches up.
+                afterPluginListChanged()
+                if (installFailures.isNotEmpty()) {
+                    _ui.value = _ui.value.copy(
+                        message = "已用已安装插件启动；${installFailures.joinToString("、")}安装失败，可在插件管理中重试"
+                    )
+                }
+            }
         }
         guarded.launch {
             MusicRepository.events.collect { event -> handleEvent(event) }
+        }
+        // Refresh previously cached plugin content in the background at boot.
+        // The Go side walks every cache entry, re-fetches it and emits
+        // contentUpdated for the ones still on screen. No cache yet (first run)
+        // means a no-op — the first open populates it instead.
+        guarded.launch {
+            try {
+                facade.Facade.refreshContent()
+            } catch (t: Throwable) {
+                android.util.Log.w("MyGoCache", "refreshContent failed", t)
+            }
         }
         consumeInstallLink()
     }
@@ -325,12 +388,39 @@ class MainViewModel : ViewModel() {
                         else now?.let { it.toFavorite(src) }
                 )
                 loadLyricsFor(player)
+                scheduleSessionSave()
             }
             "playing", "state" -> guarded.launch {
                 _ui.value = _ui.value.copy(player = MusicRepository.queue())
+                scheduleSessionSave()
             }
             "error" -> _ui.value = _ui.value.copy(message = o.optString("message", "错误"))
             "pluginInstalled", "pluginRemoved" -> guarded.launch { afterPluginListChanged() }
+            // Background cache refresh finished for one entry. Replace the UI
+            // only if the user is still looking at exactly that entry; a page
+            // opened meanwhile keeps its cache and refreshes on next visit.
+            "contentUpdated" -> {
+                val pluginID = o.optString("pluginID", "")
+                val kind = o.optString("kind", "")
+                val key = when (kind) {
+                    "browse" -> "browse|" + o.optString("page", "").ifEmpty { "home" }
+                    "detail" -> {
+                        val d = o.optString("detail")
+                        val itemId = o.optString("id")
+                        "detail|$d|$itemId|" + o.optInt("offset", 0)
+                    }
+                    else -> ""
+                }
+                if (key.isEmpty() || pluginID != _ui.value.activeSourceId) return
+                if (key != _ui.value.contentKey) return
+                guarded.launch {
+                    if (key.startsWith("browse|")) {
+                        refreshBrowse()
+                    } else {
+                        reloadDetailInPlace()
+                    }
+                }
+            }
             // A plugin signing in shows either a page (host.webSignIn, handled
             // by SignInCoordinator) or a QR code, which arrives here.
             "signInPrompt" -> {
@@ -517,16 +607,22 @@ class MainViewModel : ViewModel() {
         }
         val browse = try {
             var result: Browse? = null
+            var resultKey = ""
             var lastFailure: Exception? = null
             for (page in navPageCandidates(nav)) {
                 try {
                     result = MusicRepository.browse(id, page)
+                    // Go normalizes "" to "home" when building the cache key.
+                    resultKey = "browse|" + page.ifEmpty { "home" }
                     break
                 } catch (e: Exception) {
                     lastFailure = e
                 }
             }
-            result ?: throw (lastFailure ?: IllegalStateException("没有可打开的页面"))
+            if (result == null) throw (lastFailure ?: IllegalStateException("没有可打开的页面"))
+            // Carry the key alongside the result; only commit both after the
+            // staleness check below so a switched-away page sets neither.
+            result to resultKey
         } catch (e: Exception) {
             // A source that times out must not leave the page on "加载中…"
             // forever, and must not escape to the guard as a bare toast either:
@@ -542,7 +638,7 @@ class MainViewModel : ViewModel() {
         // A network source can answer after the user has already switched plugin
         // or category; dropping the late result keeps the header and content in step.
         if (id != _ui.value.activeSourceId || expectedKey != _ui.value.activeNav?.key) return
-        _ui.value = _ui.value.copy(browse = browse)
+        _ui.value = _ui.value.copy(browse = browse.first, contentKey = browse.second)
     }
 
     fun selectSource(id: String) {
@@ -557,6 +653,7 @@ class MainViewModel : ViewModel() {
                 browse = Browse(title = "", sections = emptyList())
             )
             guarded.launch { refreshBrowse() }
+            persistUi()
             return
         }
         _ui.value = _ui.value.copy(
@@ -569,6 +666,7 @@ class MainViewModel : ViewModel() {
             browse = Browse(title = "", sections = emptyList())
         )
         guarded.launch { refreshBrowse() }
+        persistUi()
     }
 
     /** Select a category declared by the active plugin's navigation array. */
@@ -583,6 +681,7 @@ class MainViewModel : ViewModel() {
             browseBackStack = emptyList()
         )
         guarded.launch { refreshBrowse() }
+        persistUi()
     }
 
     // ---------------------------------------------------------------- favourites
@@ -609,6 +708,7 @@ class MainViewModel : ViewModel() {
             browse = favoritesBrowse(source),
             browseBackStack = emptyList()
         )
+        persistUi()
     }
 
     fun isFavorite(key: String): Boolean =
@@ -717,6 +817,7 @@ class MainViewModel : ViewModel() {
                 else -> Unit
             }
         }
+        persistUi()
     }
 
     /**
@@ -782,9 +883,11 @@ class MainViewModel : ViewModel() {
                 .onSuccess { browse ->
                     if (source != _ui.value.activeSourceId) return@onSuccess
                     val cur = _ui.value
+                    val key = "detail|$kind|$id|$offset"
                     _ui.value = cur.copy(
                         browse = browse,
                         page = Page.BROWSE,
+                        contentKey = key,
                         browseBackStack = cur.browseBackStack + BrowseBackEntry(cur.page, cur.browse, cur.activeNav)
                     )
                 }
@@ -792,6 +895,29 @@ class MainViewModel : ViewModel() {
                     _ui.value = _ui.value.copy(message = "打开详情失败：${e.message ?: "未知错误"}")
                 }
         }
+    }
+
+    /**
+     * Refresh the detail page currently on screen after its cached entry was
+     * replaced in the background. Reuses the openDetail arguments but updates
+     * only [browse] — no back-stack push, no page switch, no jump.
+     */
+    private suspend fun reloadDetailInPlace() {
+        val source = _ui.value.activeSourceId
+        val key = _ui.value.contentKey
+        if (source.isBlank() || !key.startsWith("detail|")) return
+        val parts = key.split("|")
+        if (parts.size != 4) return
+        val kind = parts[1]
+        val id = parts[2]
+        val offset = parts[3].toIntOrNull() ?: return
+        runCatching { MusicRepository.detail(source, kind, id, offset) }
+            .onSuccess { browse ->
+                if (source == _ui.value.activeSourceId && key == _ui.value.contentKey) {
+                    _ui.value = _ui.value.copy(browse = browse)
+                }
+            }
+            .onFailure { /* keep the cached copy on screen */ }
     }
 
     /** "show:73103039:30" -> (show, 73103039, 30). Anything else is null. */
@@ -1076,10 +1202,69 @@ class MainViewModel : ViewModel() {
         _ui.value = _ui.value.copy(player = MusicRepository.queue())
     }
 
+    /** Shuffle keeps the current track; only the play order changes. */
+    fun toggleShuffle() = guarded.launch {
+        val current = MusicRepository.queue()
+        runCatching { MusicRepository.setShuffle(!current.shuffle) }
+            .onFailure { android.util.Log.w("MyGoPlayMode", "setShuffle failed", it) }
+        _ui.value = _ui.value.copy(player = MusicRepository.queue())
+    }
+
+    /** Cycles 不循环 -> 清单循环 -> 单曲循环 -> 不循环. */
+    fun cycleRepeat() = guarded.launch {
+        runCatching { MusicRepository.cycleRepeat() }
+            .onFailure { android.util.Log.w("MyGoPlayMode", "cycleRepeat failed", it) }
+        _ui.value = _ui.value.copy(player = MusicRepository.queue())
+    }
+
     fun volume(v: Double) = guarded.launch { MusicRepository.volume(v) }
 
     fun seekTo(ms: Long) = guarded.launch {
         runCatching { MusicRepository.seek(ms) }
+        scheduleSessionSave()
+    }
+
+    /** Coalesce snapshot writes: a seek fires several player events at once. */
+    private fun scheduleSessionSave() {
+        sessionHandler.removeCallbacks(saveSessionRunnable)
+        sessionHandler.postDelayed(saveSessionRunnable, 400)
+    }
+
+    private fun saveSessionNow() {
+        val position = runCatching { PlaybackHolder.current()?.currentPosition ?: 0L }.getOrDefault(0L)
+        try {
+            facade.Facade.saveSession(position)
+        } catch (t: Throwable) {
+            android.util.Log.w("MyGoSession", "saveSession failed", t)
+        }
+    }
+
+    /** Skip before first paint so an empty snapshot cannot overwrite a good one. */
+    private fun persistUi() {
+        val ui = _ui.value
+        if (!ui.ready) return
+        uiStateStore?.save(
+            UiStateStore.Snapshot(
+                sourceId = ui.activeSourceId,
+                page = ui.page.name,
+                navKey = ui.activeNav?.key ?: "",
+                playerOpen = ui.playerOpen,
+                playerPane = ui.playerPane.name,
+                maximized = ui.maximized
+            )
+        )
+    }
+
+    /** MainActivity.onStop: flush both layers synchronously before the process dies. */
+    fun persistNow() {
+        sessionHandler.removeCallbacks(saveSessionRunnable)
+        saveSessionNow()
+        persistUi()
+    }
+
+    fun setAutoResume(on: Boolean) = guarded.launch {
+        runCatching { MusicRepository.setAppSettings(autoResume = on) }
+        _ui.value = _ui.value.copy(settings = MusicRepository.appSettings())
     }
 
     // ------------------------------------------------------- now playing
@@ -1093,19 +1278,25 @@ class MainViewModel : ViewModel() {
         val wanted = pane ?: if (_ui.value.settings.lyrics) PlayerPane.LYRICS else PlayerPane.QUEUE
         _ui.value = _ui.value.copy(playerOpen = true, playerPane = wanted)
         if (wanted == PlayerPane.LYRICS) guarded.launch { loadLyricsFor(_ui.value.player) }
+        persistUi()
     }
 
-    fun closePlayer() { _ui.value = _ui.value.copy(playerOpen = false) }
+    fun closePlayer() {
+        _ui.value = _ui.value.copy(playerOpen = false)
+        persistUi()
+    }
 
     /** 播放界面的 16:9 ↔ 32:9 最大化切换；仅首页可用。 */
     fun toggleMaximized() {
         if (_ui.value.page != Page.HOME) return
         _ui.value = _ui.value.copy(maximized = !_ui.value.maximized)
+        persistUi()
     }
 
     fun setPlayerPane(pane: PlayerPane) {
         _ui.value = _ui.value.copy(playerPane = pane)
         if (pane == PlayerPane.LYRICS) guarded.launch { loadLyricsFor(_ui.value.player) }
+        persistUi()
     }
 
     /** Tap a queue row: jump the cursor there instead of rebuilding the queue. */

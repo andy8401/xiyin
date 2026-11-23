@@ -156,6 +156,25 @@ object MusicRepository {
 
     suspend fun next() = withContext(Dispatchers.IO) { Facade.next() }
     suspend fun prev() = withContext(Dispatchers.IO) { Facade.prev() }
+
+    /** Shuffle plays each row once in a random order; Go persists the choice. */
+    suspend fun setShuffle(on: Boolean) = withContext(Dispatchers.IO) { Facade.setShuffle(on) }
+
+    /** Cycles off -> all -> one -> off and returns the new mode name. */
+    suspend fun cycleRepeat(): String = withContext(Dispatchers.IO) {
+        runCatching { Facade.cycleRepeat() }.getOrDefault("all")
+    }
+
+    /** Persist the playback snapshot. Kotlin owns the real Media3 position. */
+    suspend fun saveSession(positionMs: Long) = withContext(Dispatchers.IO) {
+        Facade.saveSession(positionMs)
+    }
+
+    /** Rebuild queue or station from the snapshot; autoplay comes from settings. */
+    suspend fun resumeSession(autoplay: Boolean) = withContext(Dispatchers.IO) {
+        runCatching { Facade.resumeSession(autoplay) }.getOrDefault("")
+    }
+
     suspend fun seek(ms: Long) = withContext(Dispatchers.IO) { Facade.seekMs(ms) }
     suspend fun volume(v: Double) = withContext(Dispatchers.IO) { Facade.setVolume(v) }
 
@@ -167,7 +186,10 @@ object MusicRepository {
             volume = o.optDouble("volume", 1.0),
             appearance = o.optString("appearance", "system"),
             normalize = o.optBoolean("normalize", false),
-            lyrics = o.optBoolean("lyrics", true)
+            lyrics = o.optBoolean("lyrics", true),
+            shuffle = o.optBoolean("shuffle", false),
+            repeat = o.optString("repeat", "all").ifBlank { "all" },
+            autoResume = o.optBoolean("autoResume", false)
         )
     }
 
@@ -176,7 +198,10 @@ object MusicRepository {
         quality: String? = null,
         volume: Double? = null,
         appearance: String? = null,
-        lyrics: Boolean? = null
+        lyrics: Boolean? = null,
+        shuffle: Boolean? = null,
+        repeat: String? = null,
+        autoResume: Boolean? = null
     ) = withContext(Dispatchers.IO) {
         val patch = JSONObject()
         language?.let { patch.put("language", it) }
@@ -184,6 +209,9 @@ object MusicRepository {
         volume?.let { patch.put("volume", it) }
         appearance?.let { patch.put("appearance", it) }
         lyrics?.let { patch.put("lyrics", it) }
+        shuffle?.let { patch.put("shuffle", it) }
+        repeat?.let { patch.put("repeat", it) }
+        autoResume?.let { patch.put("autoResume", it) }
         Facade.setSettingsJSON(patch.toString())
     }
 

@@ -127,6 +127,9 @@ func UninstallPlugin(pluginID string) error {
 			return fmt.Errorf("remove plugin: %w", err)
 		}
 		b.plugins = append(b.plugins[:i], b.plugins[i+1:]...)
+		// Cached content is dropped on uninstall (plugin-data is kept for
+		// reinstall state). A later reinstall re-caches from scratch.
+		clearCache(pluginID)
 		if b.queuePluginID == pluginID {
 			b.queueJSON = ""
 			b.queuePluginID = ""

@@ -15,13 +15,18 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
 import com.andy8401.mygo.car.bridge.InstallRequest
 import com.andy8401.mygo.car.ui.CarScreen
 import com.andy8401.mygo.car.ui.CarTheme
 import com.andy8401.mygo.car.ui.MainViewModel
 
 class MainActivity : ComponentActivity() {
+
+    /** Same instance Compose obtains via viewModel(): both use the activity's
+     *  ViewModelStore, so onStop can flush what the UI has been holding. */
+    private lateinit var vm: MainViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setUpSystemBars()
@@ -34,14 +39,19 @@ class MainActivity : ComponentActivity() {
         }
 
         handleInstallIntent(intent)
+        vm = ViewModelProvider(this)[MainViewModel::class.java]
 
         setContent {
             CarTheme {
-                val vm: MainViewModel = viewModel()
                 vm.init(this@MainActivity)
                 CarScreen(vm)
             }
         }
+    }
+
+    override fun onStop() {
+        vm.persistNow()
+        super.onStop()
     }
 
     /**

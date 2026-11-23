@@ -3,6 +3,7 @@ package facade
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"mygo-music/internal/music"
@@ -42,14 +43,34 @@ func OpenDetailJSON(pluginID, kind, id string, offset int) (string, error) {
 	if strings.TrimSpace(id) == "" {
 		return "", fmt.Errorf("empty %s id", kind)
 	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+
+	// Cached by the caller's (kind,id,offset) so re-opening the same detail page
+	// is instant; RefreshContent replaces it in the background. The cache is
+	// bounded and evicts least-recently-used entries (see cache.go).
+	key := cacheKey("detail", kind, id, strconv.Itoa(offset))
+	if env, ok := readEnvelope(pluginID, key); ok {
+		return string(env.Data), nil
+	}
+
 	b.mu.Lock()
 	p, err := pluginByID(pluginID)
 	b.mu.Unlock()
 	if err != nil {
 		return "", err
 	}
+	data, err := fetchDetail(p, kind, id, offset)
+	if err != nil {
+		return "", err
+	}
+	_ = writeEnvelope(pluginID, key, "detail", "", kind, id, offset, data)
+	return data, nil
+}
 
-	kind = strings.ToLower(strings.TrimSpace(kind))
+// fetchDetail is the network/plugin path shared by OpenDetailJSON and its
+// background refresh. It never touches the cache, so a refresh can rebuild the
+// exact same bytes the first open produced.
+func fetchDetail(p *plugin.Plugin, kind, id string, offset int) (string, error) {
 	// The fallback below repairs a mismatched *known* kind (the UI says 专辑
 	// while ximalaya-web exports show). An arbitrary kind is a caller bug: do
 	// not silently open some other page for it.
